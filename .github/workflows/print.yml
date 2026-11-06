@@ -32,8 +32,8 @@ jobs:
       targets: ""
       # A filter that matches nothing still passes, so the printps run fails unless some test ran.
       command: |
-        cargo clippy --locked -p vectorcraft --all-targets -- -D warnings
-        cargo test --locked -p vectorcraft
+        cargo clippy -p vectorcraft --all-targets -- -D warnings
+        cargo test -p vectorcraft
         log="$RUNNER_TEMP/printps.log"
-        cargo test --locked -p vectorcraft-ui-egui --lib -- tests::printps | tee "$log"
+        cargo test -p vectorcraft-ui-egui --lib -- tests::printps | tee "$log"
         grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$log" || { echo "::error::tests::printps matched no tests"; exit 1; }
