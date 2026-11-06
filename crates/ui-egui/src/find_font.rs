@@ -700,10 +700,7 @@ mod tests {
         let at = |texts: &[(String, egui::Rect)], text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, r)| *r);
         // Opening selects the system font, and font menus differ between hosts. The selected
         // family may be below the first row, so start scrolling at the first visible row.
-        let (start_label, start) = labels
-            .iter()
-            .find_map(|label| at(&texts, label).map(|rect| (label, rect)))
-            .expect("the rows show a visible font");
+        let (start_label, start) = labels.iter().find_map(|label| at(&texts, label).map(|rect| (label, rect))).expect("the rows show a visible font");
         let (doc_before, rows_before) = (painted(&texts, &doc_labels), painted(&texts, &labels));
         assert!(!doc_before.is_empty(), "the document's fonts are listed: {doc_before:?}");
         assert!(!rows_before.is_empty(), "{rows_before:?}");
