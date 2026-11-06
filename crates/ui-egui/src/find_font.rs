@@ -698,7 +698,12 @@ mod tests {
         let rows = replacement_rows(&app, "system", &used);
         let labels: Vec<String> = rows.iter().map(|r| row_label(&r.family, &r.style)).collect();
         let at = |texts: &[(String, egui::Rect)], text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, r)| *r);
-        let start = at(&texts, &labels[0]).expect("the rows start at their top");
+        // Opening selects the system font, and font menus differ between hosts. The selected
+        // family may be below the first row, so start scrolling at the first visible row.
+        let (start_label, start) = labels
+            .iter()
+            .find_map(|label| at(&texts, label).map(|rect| (label, rect)))
+            .expect("the rows show a visible font");
         let (doc_before, rows_before) = (painted(&texts, &doc_labels), painted(&texts, &labels));
         assert!(!doc_before.is_empty(), "the document's fonts are listed: {doc_before:?}");
         assert!(!rows_before.is_empty(), "{rows_before:?}");
@@ -714,7 +719,7 @@ mod tests {
             frame(&ctx, &mut app, vec![]);
         }
         let texts = frame(&ctx, &mut app, vec![]);
-        assert!(at(&texts, &labels[0]).is_none(), "the wheel scrolls the first rows out of view");
+        assert!(at(&texts, start_label).is_none(), "the wheel scrolls the top visible rows out of view");
         assert_ne!(painted(&texts, &labels), rows_before, "the wheel scrolls the rows");
         assert_eq!(painted(&texts, &doc_labels), doc_before, "the document's font list stays where it was");
     }

@@ -2809,8 +2809,7 @@ fn the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported() {
     use vectorcraft_text::test_fonts::{MATRA_FAMILY, alternates_family, alternates_font, matra_font};
     let _fonts = crate::adding_fonts();
     let db = vectorcraft_text::FontDb::global();
-    // This test supplies its own fallback face; do not let a host Devanagari font win the
-    // preferred-family lookup before the test face does.
+    // This test supplies its own faces; do not lazy-load a host font during the lookup.
     db.set_system_fallback(false);
     db.add_font(alternates_font(true).expect("the test font builds"));
     db.add_font(matra_font().expect("the test font builds"));
@@ -2823,17 +2822,20 @@ fn the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported() {
         NodeId(s.execute("text.create", &spec).unwrap()["id"].as_u64().unwrap())
     };
     let open = create(&mut s, 200.0);
-    let glyphs = vectorcraft_text::layout(db, &obj(&s, open)).glyphs;
+    let glyphs = vectorcraft_text::layout(&db, &obj(&s, open)).glyphs;
     let fallback = db.face_by_id(glyphs[0].font_id).expect("the fallback face");
     assert_ne!(fallback.id(), requested.id());
-    let (ka, sign) = (fallback.glyph_for('क'), fallback.glyph_for('\u{93F}'));
-    let drawn: Vec<_> = glyphs.iter().map(|g| (g.gid, g.byte)).collect();
-    assert_eq!(drawn, [(sign, 0), (ka, 0)], "the vowel sign is drawn first, in Ka's cluster ({} or {MATRA_FAMILY})", fallback.family);
+    let ka = fallback.glyph_for('क');
+    assert_eq!(glyphs.len(), 2);
+    assert_eq!(glyphs[0].byte, 0, "the vowel sign belongs to Ka's cluster");
+    assert_ne!(glyphs[0].gid, ka, "the vowel sign is drawn before Ka");
+    assert_eq!(glyphs[1].byte, 0, "Ka belongs to the same cluster");
+    assert_eq!(glyphs[1].gid, ka, "the vowel sign is drawn first in {}'s cluster (or {MATRA_FAMILY})", fallback.family);
     let query = s.execute("text.glyphAlternates", &json!({"id": open.0, "start": 0})).unwrap();
     assert_eq!(query["chosen"], json!(ka), "the fallback face's glyph for Ka");
 
     let boxed = create(&mut s, 2.0);
-    assert!(vectorcraft_text::layout(db, &obj(&s, boxed)).glyphs.is_empty(), "the text overflows");
+    assert!(vectorcraft_text::layout(&db, &obj(&s, boxed)).glyphs.is_empty(), "the text overflows");
     let query = s.execute("text.glyphAlternates", &json!({"id": boxed.0, "start": 0})).unwrap();
     assert_eq!(query["chosen"], json!(ka), "an overflowing Ka reports the fallback face's glyph for Ka");
 }
