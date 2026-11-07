@@ -25,7 +25,7 @@ jobs:
             target: stream
     env:
       CARGO_BUILD_JOBS: 4
-      CARGO_TARGET_DIR: /jobs/work/speedcraft-labs/targets/fuzzers-200-vectorcraft
+      CARGO_TARGET_DIR: /jobs/work/speedcraft-labs/targets/fuzzers-200-vectorcraft/${{ matrix.crate }}
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
