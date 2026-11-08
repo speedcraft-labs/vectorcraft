@@ -134,6 +134,14 @@ impl GpuRuntime {
         };
         for (output_row, source_row) in pixels.chunks_exact_mut(row_bytes).zip(mapped.chunks_exact(target.bytes_per_row as usize)) {
             output_row.copy_from_slice(&source_row[..row_bytes]);
+            // VectorCraft's pixmap contract is premultiplied RGBA. Normalize Vello's readback
+            // before comparing or handing it to the canvas.
+            for rgba in output_row.chunks_exact_mut(4) {
+                let alpha = u16::from(rgba[3]);
+                for channel in &mut rgba[..3] {
+                    *channel = ((*channel as u16 * alpha + 127) / 255) as u8;
+                }
+            }
         }
         drop(mapped);
         target.readback.unmap();
