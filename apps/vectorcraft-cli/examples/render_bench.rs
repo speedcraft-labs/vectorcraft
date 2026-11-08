@@ -31,11 +31,10 @@ fn synthetic(paths: usize) -> Result<Document, String> {
 fn main() -> Result<(), String> {
     let paths = std::env::args().skip(1).find_map(|arg| arg.strip_prefix("--paths=").and_then(|n| n.parse().ok())).unwrap_or(50_000);
     let doc = synthetic(paths)?;
-    let input_hash = format!("{:x}", Sha256::digest(vectorcraft_format::save_file(&doc)));
     let mut renderer = Renderer::new();
     let options = RenderOptions::default();
     let view = Affine::scale(1.6);
-    renderer.render(&doc, 2880, 1800, view, &options);
+    let warmup = renderer.render(&doc, 2880, 1800, view, &options);
     let mut samples = Vec::with_capacity(5);
     for _ in 0..5 {
         let start = Instant::now();
@@ -45,6 +44,7 @@ fn main() -> Result<(), String> {
     }
     samples.sort_unstable();
     println!("CRAFT_JOURNEY_NS={}", samples[samples.len() / 2]);
-    println!("CRAFT_OUTPUT_SHA256={input_hash}");
+    let output_hash = format!("{:x}", Sha256::digest(&warmup.pixels));
+    println!("CRAFT_OUTPUT_SHA256={output_hash}");
     Ok(())
 }
