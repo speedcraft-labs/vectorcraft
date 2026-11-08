@@ -10,6 +10,9 @@ description = "VectorCraft command line: MCP server (stdio) and headless batch r
 name = "vectorcraft-cli"
 path = "src/main.rs"
 
+[features]
+gpu-raster = ["vectorcraft-render/gpu"]
+
 [lints]
 workspace = true
 
@@ -25,6 +28,7 @@ vectorcraft-render = { workspace = true }
 vectorcraft-text = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+sha2 = "0.10"
 
 # `perf` on Windows (src/perf.rs) reads how busy the processors are (GetSystemTimes) and this
 # process's working set (GetProcessMemoryInfo) through winsafe's safe wrappers over Win32 (MIT),
