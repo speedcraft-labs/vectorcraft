@@ -18,6 +18,7 @@ bundled-fonts = ["vectorcraft-engine/bundled-fonts"]
 # panels and dialogs draw in egui's built-in fonts, which lack some symbols they show (→ ▾ ● ✓);
 # `theme::install_fonts` binds their families either way.
 interface-fonts = []
+gpu-raster = ["vectorcraft-render/gpu"]
 
 [dependencies]
 craft-ui = { workspace = true }

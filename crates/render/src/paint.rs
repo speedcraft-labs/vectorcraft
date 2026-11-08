@@ -1,8 +1,8 @@
 //! Paint conversion (solid, gradients, patterns) and image decoding.
 
+use crate::RenderContext;
 use vectorcraft_color::{GradientKind, Paint};
 use vectorcraft_geom::{Rect, Vec2};
-use vello_cpu::RenderContext;
 use vello_cpu::peniko::{self, ColorStop};
 
 use super::{BlendMode, Compose, FillRule, Mix, vello_cpu};

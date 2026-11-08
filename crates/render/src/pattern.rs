@@ -19,12 +19,13 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
 
+use crate::RenderContext;
 use vectorcraft_color::cms::Cms;
 use vectorcraft_doc::pattern::{Overlap, PatternDef, TileType};
 use vectorcraft_doc::{Document, Node};
 use vectorcraft_geom::{Affine, Rect, Shape, Vec2};
+use vello_cpu::Pixmap;
 use vello_cpu::peniko::{Extend, ImageQuality, ImageSampler};
-use vello_cpu::{Pixmap, RenderContext};
 
 use crate::ink::Ink;
 use crate::lru::{self, FrameCache};

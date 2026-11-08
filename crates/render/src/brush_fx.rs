@@ -15,10 +15,10 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Weak};
 
+use crate::RenderContext;
 use vectorcraft_brush::{Brush, BrushKind};
 use vectorcraft_doc::{AppearanceItem, Document, Node, NodeKind, StrokeLayer, SymbolBoxes};
 use vectorcraft_geom::{BezPath, PathEl, Point, Rect};
-use vello_cpu::RenderContext;
 
 use crate::lru::{self, FrameCache};
 use crate::{Frame, Renderer};

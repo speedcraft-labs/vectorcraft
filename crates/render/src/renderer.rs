@@ -18,6 +18,45 @@ use super::{
     group, ink, kurbo, live, lru, peniko, proof, vello_cpu,
 };
 
+#[cfg(feature = "gpu")]
+fn gpu_compatible(doc: &Document, opts: &RenderOptions) -> bool {
+    use vectorcraft_doc::NodeKind;
+    if opts.outline
+        || opts.mask_view.is_some()
+        || opts.overprint_preview
+        || opts.proof.is_some()
+        || opts.isolated.is_some()
+        || opts.precise
+        || doc.page_isolate
+        || doc.page_knockout
+        || doc.mask_edit.is_some()
+        || doc.pattern_edit.is_some()
+    {
+        return false;
+    }
+    fn plain(node: &Node) -> bool {
+        if !node.visible
+            || node.opacity != 1.0
+            || node.blend != vectorcraft_color::BlendMode::Normal
+            || node.isolate
+            || node.knockout_shape
+            || node.extras().mask.is_some()
+            || !node.appearance.effects.is_empty()
+            || node.appearance.items.iter().any(|item| !item.effects().is_empty())
+        {
+            return false;
+        }
+        match &node.kind {
+            NodeKind::Layer { children, clip: false, template: false, preview: true, dim_images: None, .. } => {
+                children.iter().all(|child| plain(child))
+            }
+            NodeKind::Path { live: None, clipping: false, guide: false, .. } => true,
+            _ => false,
+        }
+    }
+    doc.layers.iter().all(|layer| plain(layer))
+}
+
 #[cfg(test)]
 pub(crate) use paint::{STROKES_OUTLINED, anchors_moved, offset_between};
 
@@ -51,6 +90,12 @@ impl Renderer {
             stamp: 0,
             alpha: 1.0,
             contexts: Vec::new(),
+            #[cfg(feature = "gpu")]
+            gpu: None,
+            #[cfg(feature = "gpu")]
+            gpu_enabled: false,
+            #[cfg(feature = "gpu")]
+            gpu_attempted: false,
             resources: Resources::new(),
             stats: FrameStats::default(),
             brushes: Default::default(),
@@ -85,6 +130,35 @@ impl Renderer {
             proof_art: None,
             hairline: 1.0,
         }
+    }
+
+    /// Whether this renderer has a working Vello GPU device.
+    #[cfg(feature = "gpu")]
+    pub fn gpu_available(&self) -> bool {
+        self.gpu.is_some()
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn gpu_adapter_name(&self) -> Option<String> {
+        self.gpu.as_ref().and_then(|gpu| gpu.lock().ok().map(|runtime| runtime.adapter_name().to_owned()))
+    }
+
+    /// Construct a renderer that lazily prefers Vello GPU on supported frames and retains
+    /// vello_cpu for unsupported frames, device failures, and all non-GPU builds.
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu() -> Self {
+        let mut renderer = Self::new();
+        renderer.gpu_enabled = true;
+        renderer
+    }
+
+    #[cfg(feature = "gpu")]
+    fn gpu_runtime(&mut self) -> Option<Arc<std::sync::Mutex<super::gpu::GpuRuntime>>> {
+        if self.gpu_enabled && !self.gpu_attempted {
+            self.gpu_attempted = true;
+            self.gpu = super::gpu::GpuRuntime::new().map(|gpu| Arc::new(std::sync::Mutex::new(gpu)));
+        }
+        self.gpu.clone()
     }
 
     /// Render `doc` into a `width`×`height` image using `view` (document → pixel transform).
@@ -142,9 +216,9 @@ impl Renderer {
         }
         let mut pixels = if inks || self.blends_in_cmyk(doc, opts) {
             // Blending in CMYK: one frame per ink plane, then their inks shown on screen.
-            let cmy = self.draw_frame(&Frame { ink: Ink::Cmy, ..frame }, w, h);
+            let cmy = self.draw_frame(&Frame { ink: Ink::Cmy, ..frame }, w, h, false);
             let stats = self.stats;
-            let k = self.draw_frame(&Frame { ink: Ink::K, ..frame }, w, h);
+            let k = self.draw_frame(&Frame { ink: Ink::K, ..frame }, w, h, false);
             self.stats = stats;
             if inks {
                 ink::amounts(&cmy, &k)
@@ -154,7 +228,7 @@ impl Renderer {
                 pixels
             }
         } else {
-            self.draw_frame(&frame, w, h)
+            self.draw_frame(&frame, w, h, false)
         };
         self.end_frame();
         if !inks {
@@ -215,15 +289,40 @@ impl Renderer {
     }
 
     /// Draw frame `f` (`w`×`h` pixels): the background, the artboards and the page's art.
-    fn draw_frame(&mut self, f: &Frame, w: u16, h: u16) -> Vec<u8> {
+    fn draw_frame(&mut self, f: &Frame, w: u16, h: u16, force_cpu: bool) -> Vec<u8> {
         let (threads, opts) = (self.threads, f.opts);
-        let kept = self.contexts.iter().position(|(t, c)| *t == threads && c.width() == w && c.height() == h);
+        #[cfg(feature = "gpu")]
+        let stats_before = self.stats;
+        #[cfg(feature = "gpu")]
+        let gpu = if !force_cpu && f.ink == Ink::Display && gpu_compatible(f.doc, opts) { self.gpu_runtime() } else { None };
+        #[cfg(feature = "gpu")]
+        let use_gpu = gpu.is_some();
+        #[cfg(not(feature = "gpu"))]
+        let _ = force_cpu;
+        #[cfg(not(feature = "gpu"))]
+        let use_gpu = false;
+        let kept = self.contexts.iter().position(|(t, c)| *t == threads && c.width() == w && c.height() == h && c.is_gpu() == use_gpu);
         let mut ctx = match kept.map(|i| self.contexts.remove(i)) {
             Some((_, mut c)) => {
                 c.reset();
                 c
             }
-            None => RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: threads, ..Default::default() }),
+            None => {
+                #[cfg(feature = "gpu")]
+                if use_gpu {
+                    if let Some(gpu) = &gpu {
+                        RenderContext::with_gpu(w, h, threads, Arc::clone(gpu))
+                    } else {
+                        RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: threads, ..Default::default() })
+                    }
+                } else {
+                    RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: threads, ..Default::default() })
+                }
+                #[cfg(not(feature = "gpu"))]
+                {
+                    RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: threads, ..Default::default() })
+                }
+            }
         };
         // `reset` keeps the threshold of the previous render: set it every time.
         ctx.set_aliasing_threshold(opts.anti_alias.threshold());
@@ -256,6 +355,14 @@ impl Renderer {
             self.draw_page(&mut ctx, f);
         }
         let pm = self.finish(&mut ctx, self.raster);
+        #[cfg(feature = "gpu")]
+        if use_gpu && !ctx.gpu_used() {
+            // GPU-only scene recording avoids encoding every operation twice. If a scene contains
+            // an unsupported operation or the device fails, replay the frame through the CPU.
+            self.stats = stats_before;
+            return self.draw_frame(f, w, h, true);
+        }
+        self.stats.gpu_rasterized |= ctx.gpu_used();
         self.contexts.push((threads, ctx));
         if self.contexts.len() > 2 {
             self.contexts.remove(0);

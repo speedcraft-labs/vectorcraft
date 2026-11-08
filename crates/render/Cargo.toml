@@ -7,7 +7,7 @@ description = "VectorCraft renderer: document to pixels (vello_cpu with optional
 
 [features]
 default = []
-gpu = ["dep:vello_hybrid", "dep:wgpu_hybrid", "dep:pollster"]
+gpu = ["dep:vello", "dep:wgpu_gpu", "dep:pollster"]
 
 [lints]
 workspace = true
@@ -20,9 +20,9 @@ vectorcraft-text = { workspace = true }
 vectorcraft-effects = { workspace = true }
 vectorcraft-brush = { workspace = true }
 vello_cpu = { workspace = true }
-# Optional Vello Hybrid path rasterization. Keep the CPU backend available for fallback and parity.
-vello_hybrid = { version = "0.2", default-features = false, features = ["wgpu", "wgpu_default", "text"], optional = true }
-wgpu_hybrid = { package = "wgpu", version = "29.0", optional = true }
+# Optional compute-centric Vello GPU rasterization. Keep Vello CPU available for fallback and parity.
+vello = { version = "0.11", default-features = false, features = ["wgpu", "wgpu_default"], optional = true }
+wgpu_gpu = { package = "wgpu", version = "30.0", optional = true }
 pollster = { version = "0.4", optional = true }
 # Filter types (Gaussian blur, drop shadow) are not re-exported by vello_cpu 0.2.
 vello_common = { version = "0.2", default-features = false }
@@ -48,6 +48,7 @@ winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] 
 
 [dev-dependencies]
 vectorcraft-testkit = { workspace = true }
+vectorcraft-format = { workspace = true }
 # A variable font built in code (no font file is committed).
 vectorcraft-text = { workspace = true, features = ["test-fonts"] }
 # Live-effect plug-ins the cache tests install, written in WebAssembly text.

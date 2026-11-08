@@ -32,7 +32,11 @@ use vectorcraft_doc::{AppearanceItem, Document, Node, NodeId, NodeKind, StrokeAl
 use vectorcraft_geom::{Affine, BezPath, FillRule, Rect, Shape};
 use vello_cpu::kurbo;
 use vello_cpu::peniko::{self, BlendMode, Compose, Mix};
-use vello_cpu::{Pixmap, RenderContext, Resources};
+use vello_cpu::{Pixmap, Resources};
+
+mod context;
+#[cfg(feature = "gpu")]
+mod gpu;
 
 use group::Composite;
 use ink::Ink;
@@ -40,6 +44,7 @@ use lru::FrameCache;
 
 pub use brush_fx::instance_art;
 pub use changed::{Changed, changed, placed_area, view_pixels};
+pub(crate) use context::RenderContext;
 pub use effects::stroke::width_outline;
 pub use images::{IMAGE_CACHE_MAX, image_cache_bytes, installed_memory, newly_undecodable, set_image_cache_budget};
 pub use live::expand_live;
@@ -108,6 +113,12 @@ pub struct Renderer {
     /// frame of the size of one reuses it instead of making a context and its threads. Two are
     /// kept, so a view's frames and the parts of them drawn again ([`changed`]) each keep theirs.
     contexts: Vec<(u16, RenderContext)>,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<std::sync::Mutex<gpu::GpuRuntime>>>,
+    #[cfg(feature = "gpu")]
+    gpu_enabled: bool,
+    #[cfg(feature = "gpu")]
+    gpu_attempted: bool,
     resources: Resources,
     /// Statistics of the last frame.
     pub stats: FrameStats,

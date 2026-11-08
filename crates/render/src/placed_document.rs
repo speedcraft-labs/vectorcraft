@@ -29,10 +29,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
+use crate::RenderContext;
 use vectorcraft_doc::placed_document::MAX_DEPTH;
 use vectorcraft_doc::{ImageBlob, Node, PlacedDocument};
 use vectorcraft_geom::{Affine, Rect};
-use vello_cpu::{Pixmap, RenderContext, kurbo, peniko};
+use vello_cpu::{Pixmap, kurbo, peniko};
 
 use crate::ink::Ink;
 use crate::{Frame, Renderer};

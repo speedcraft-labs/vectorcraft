@@ -11,7 +11,7 @@ workspace = true
 
 [features]
 default = ["wgpu", "accessibility"]
-wgpu = ["eframe/wgpu", "dep:winsafe"]
+wgpu = ["eframe/wgpu", "dep:winsafe", "vectorcraft-ui-egui/gpu-raster"]
 accessibility = ["eframe/accesskit"]
 
 [dependencies]

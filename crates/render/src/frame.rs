@@ -125,6 +125,8 @@ pub struct FrameStats {
     /// How many threads composed the frame from its two ink planes, in a CMYK document that shows
     /// transparency; 0 for other frames.
     pub ink_threads: usize,
+    /// Whether Vello GPU produced any raster pixels for this frame (false on CPU/fallback frames).
+    pub gpu_rasterized: bool,
     pub micros: u64,
 }
 

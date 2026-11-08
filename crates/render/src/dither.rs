@@ -14,11 +14,12 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::RenderContext;
 use vectorcraft_color::GradientPaint;
 use vectorcraft_color::freeform::painted_box;
 use vectorcraft_geom::{Affine, Rect};
+use vello_cpu::Pixmap;
 use vello_cpu::peniko::{Extend, ImageQuality, ImageSampler};
-use vello_cpu::{Pixmap, RenderContext};
 
 use crate::ink::Ink;
 use crate::lru::{self, FrameCache};

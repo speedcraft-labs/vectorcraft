@@ -18,11 +18,11 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Weak};
 
+use crate::RenderContext;
 use vectorcraft_doc::live::{GradientMesh, MeshQuad};
 use vectorcraft_doc::placed_document::ReadDocument;
 use vectorcraft_doc::{Document, Node, NodeKind};
 use vectorcraft_geom::{Affine, BezPath, Point, Vec2};
-use vello_cpu::RenderContext;
 use vello_cpu::peniko;
 
 use crate::fx::DocInputs;

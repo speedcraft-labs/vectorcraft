@@ -53,6 +53,9 @@ impl Worker {
         std::thread::Builder::new()
             .name("vectorcraft-render".into())
             .spawn(move || {
+                #[cfg(all(feature = "gpu-raster", not(test)))]
+                let mut r = Renderer::new_gpu();
+                #[cfg(any(not(feature = "gpu-raster"), test))]
                 let mut r = Renderer::new();
                 while let Ok(mut job) = jobs.recv() {
                     // Skip stale jobs: only the newest matters.

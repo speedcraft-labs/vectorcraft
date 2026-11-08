@@ -49,13 +49,13 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Weak};
 
+use crate::RenderContext;
 use vectorcraft_color::cms::Cms;
 use vectorcraft_doc::{AppearanceItem, Document, Effect, Node, NodeId, NodeKind, SymbolBoxes};
 use vectorcraft_effects::pixel::{Channels, PixelFx};
 use vectorcraft_effects::{self as effects, GeomContext, RasterFx};
 use vectorcraft_geom::{Affine, BezPath, FillRule, PathEl, Point, Rect, Shape, Size, Vec2};
 use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
-use vello_cpu::RenderContext;
 use vello_cpu::peniko;
 
 use crate::ink::Ink;
