@@ -2859,7 +2859,6 @@ fn a_family_without_its_style_takes_its_closest_style() {
 fn a_glyph_alternate_replaces_one_character_through_undo_and_reopen() {
     use vectorcraft_text::test_fonts::{alternates_family, alternates_font, unencoded_glyphs};
     let _fonts = crate::adding_fonts();
-    let _fonts = crate::adding_fonts();
     let db = vectorcraft_text::FontDb::global();
     // The test supplies its own faces; do not lazy-load a host font during lookup.
     db.set_system_fallback(false);
