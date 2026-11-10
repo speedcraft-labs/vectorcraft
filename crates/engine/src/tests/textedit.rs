@@ -3379,7 +3379,7 @@ fn the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported() {
         NodeId(s.execute("text.create", &spec).unwrap()["id"].as_u64().unwrap())
     };
     let open = create(&mut s, 200.0);
-    let glyphs = vectorcraft_text::layout(&db, &obj(&s, open)).glyphs;
+    let glyphs = vectorcraft_text::layout(db, &obj(&s, open)).glyphs;
     let fallback = db.face_by_id(glyphs[0].font_id).expect("the fallback face");
     assert_ne!(fallback.id(), requested.id());
     let ka = fallback.glyph_for('क');
@@ -3391,7 +3391,7 @@ fn the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported() {
     assert_eq!(query["chosen"], json!(ka), "the fallback face's glyph for Ka");
 
     let boxed = create(&mut s, 2.0);
-    assert!(vectorcraft_text::layout(&db, &obj(&s, boxed)).glyphs.is_empty(), "the text overflows");
+    assert!(vectorcraft_text::layout(db, &obj(&s, boxed)).glyphs.is_empty(), "the text overflows");
     let query = s.execute("text.glyphAlternates", &json!({"id": boxed.0, "start": 0})).unwrap();
     assert_eq!(query["chosen"], json!(ka), "an overflowing Ka reports the fallback face's glyph for Ka");
 }
