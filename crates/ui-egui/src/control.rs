@@ -10,7 +10,8 @@
 //! - `ui.contextMenu.list`: the canvas context menu for the current selection, flattened
 //! - `ui.tool.select {tool}`, `ui.tool.list`
 //! - `ui.pointer {events:[{kind: down|drag|up|move|doubleclick, x, y, backquote?, space?: "doc"|"screen"}], mods?, backquote?}`:
-//!   drive the active tool through the same path as the mouse
+//!   drive the active tool through the same path as the mouse, after the synthetic input sent
+//!   before it was applied
 //! - `ui.key {key, shift?, alt?, cmd?}` / `ui.text {text}`: synthetic keyboard input
 //! - `ui.move {x, y}` / `ui.click {x, y, button?, count?, shift?…}` / `ui.drag {x, y, toX, toY, steps?}`:
 //!   real egui pointer input in screen points (reaches every widget: panels, flyouts, dialogs)
@@ -33,7 +34,7 @@
 //!   Background Save or Background Export on. A `wait` other than true, false or null is refused
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
 use serde_json::{Value, json};
@@ -95,12 +96,24 @@ fn reserve_synthetic(app: &mut VectorcraftApp, additional: usize) -> Result<(), 
 
 pub type ControlResponse = Value;
 
+pub(crate) struct PendingPointerReply {
+    pub from: u64,
+    pub to: u64,
+    pub document: Option<u64>,
+    pub reply: Sender<ControlResponse>,
+}
+
 pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<ControlResponse>,
     state: Arc<AtomicU8>,
+    /// Its place in the order requests were made ([`ControlRequest::next_seq`]).
+    seq: u64,
 }
+
+/// The sequence number of the next request made.
+static NEXT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A request's state: waiting to run, taken by the app ([`ControlRequest::claim`]), or given up
 /// by its caller before that ([`Ticket::give_up`]). It leaves `QUEUED` once, one way or the other.
@@ -123,12 +136,28 @@ impl Ticket {
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx, state: Arc::new(AtomicU8::new(QUEUED)) }, rx)
+        let seq = NEXT_SEQ.fetch_add(1, Ordering::SeqCst);
+        (Self { method: method.into(), params, reply: tx, state: Arc::new(AtomicU8::new(QUEUED)), seq }, rx)
+    }
+
+    /// The sequence number the next request made gets: every request made so far is before it.
+    pub fn next_seq() -> u64 {
+        NEXT_SEQ.load(Ordering::SeqCst)
+    }
+
+    /// Whether this request was made before the one numbered `seq`.
+    pub fn made_before(&self, seq: u64) -> bool {
+        self.seq < seq
     }
 
     /// The caller's handle on this request, to give it up with.
     pub fn ticket(&self) -> Ticket {
         Ticket(self.state.clone())
+    }
+
+    /// Whether its caller gave it up (it never runs), without taking it.
+    pub fn given_up(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == GIVEN_UP
     }
 
     /// Take the request to run it → `false` when its caller gave it up meanwhile (don't run it).
@@ -145,6 +174,34 @@ pub enum Outcome {
         path: Option<String>,
         data: bool,
     },
+    /// A `ui.pointer` reply ([`pointer_reply`]), sent once the events numbered `from..to`
+    /// ([`vectorcraft_engine::Session::input_applied`]) have been made and the edit they started
+    /// on another thread is applied, so it shows the selection after the edit.
+    AfterToolEdit {
+        from: u64,
+        to: u64,
+        document: Option<u64>,
+    },
+}
+
+/// The reply to `ui.pointer`: the selection, the key object and the active tool.
+pub(crate) fn pointer_reply(app: &mut VectorcraftApp) -> Value {
+    pointer_reply_for(app, app.session.active().map(|d| d.uid))
+}
+
+pub(crate) fn pointer_reply_for(app: &VectorcraftApp, document: Option<u64>) -> Value {
+    let state = document.and_then(|uid| app.session.documents().iter().find(|d| d.uid == uid));
+    match state {
+        Some(state) => json!({
+            "ok": true,
+            "result": {
+                "selection": state.selection.objects.iter().map(|id| id.0).collect::<Vec<_>>(),
+                "key": state.selection.key.map(|id| id.0),
+                "tool": app.session.tool_id(),
+            }
+        }),
+        None => json!({"ok": false, "error": "the gesture's document is no longer open"}),
+    }
 }
 
 fn ok(v: Value) -> Outcome {
@@ -177,6 +234,8 @@ pub fn inspect(app: &VectorcraftApp, ctx: &egui::Context) -> Value {
         fields.remove("floating_panels");
     }
     json!({
+        "scriptRunning": app.session.script_running(),
+        "scriptReport": app.session.script_report(),
         "tool": app.session.tool_id(),
         "toolOptions": app.session.tool_options(),
         "ui": ui,
@@ -421,7 +480,21 @@ pub fn handle(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlReques
                 None => ok(with_data(json!({"width": img.width, "height": img.height}), Some(&png))),
             }
         }
-        "app.open" => wrap(app.run("file.open", json!({"path": s("path")}))),
+        "app.open" => match p.get("importer").filter(|v| !v.is_null()) {
+            // The importer's parameters, else their defaults: automation gets no dialog asking for them.
+            Some(importer) => {
+                let params = p.get("params").filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!({}));
+                wrap(app.run("file.openWith", json!({"path": s("path"), "importer": importer, "params": params})))
+            }
+            // `params` go to the importer File › Open picks for the file, as in `document.open`.
+            None => {
+                let mut open = json!({"path": s("path")});
+                if let Some(params) = p.get("params").filter(|v| !v.is_null()) {
+                    open["params"] = params.clone();
+                }
+                wrap(app.run("file.open", open))
+            }
+        },
         "app.save" | "app.export" => {
             let mut p = if p.is_object() { p.clone() } else { json!({}) };
             // `wait: true`: the file is written before the reply, whatever Background Save and
@@ -434,6 +507,11 @@ pub fn handle(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlReques
                 o.remove("wait");
             }
             let method = req.method.as_str();
+            // The key check of `document.export` or `document.save` runs before the file is written.
+            let checked = if method == "app.export" { "document.export" } else { "document.save" };
+            if let Err(e) = crate::menus::check_params(&app.session, checked, &p) {
+                return err(e);
+            }
             wrap(if wait { crate::background::in_foreground(app, |app| save_or_export(app, method, &p)) } else { save_or_export(app, method, &p) })
         }
         // As the menu's Quit: `{"pending": "saveChanges"}` while a modified document is asked
@@ -532,14 +610,127 @@ pub(crate) fn save_screenshot_with_limit(
 #[cfg(test)]
 mod tests;
 
+/// The window and coordinate mapping where a control-channel Rotate View drag began.
+#[derive(Clone, Copy)]
+pub(crate) struct RotateViewPress {
+    window: (u64, u32),
+    document_resets: u64,
+    xf: Xf,
+    start_angle: f64,
+    start_rotation: f64,
+}
+
+/// Rotate View belongs to the canvas, not the engine's placeholder tool. Keep its press mapping
+/// across requests so document-coordinate drags do not move again as the view turns underneath.
+fn rotate_view_pointer(
+    app: &mut VectorcraftApp,
+    kind: PointerKind,
+    position: vectorcraft_geom::Point,
+    screen: bool,
+    shift: bool,
+) -> Result<(), String> {
+    let window = app.session.active().zip(crate::doc_windows::current(app)).map(|(d, w)| (d.uid, w.1)).ok_or("no document")?;
+    let document_resets = app.session.tool_resets();
+    let stored = if kind == PointerKind::Down { None } else { app.control_rotate_press };
+    if kind == PointerKind::Drag && stored.is_none() {
+        return Err("Rotate View needs a down event before a drag".into());
+    }
+    let mut press = match stored {
+        Some(press) => press,
+        None => {
+            let rect = app.canvas_rect.ok_or("no canvas yet")?;
+            let view = app.view().ok_or("no document")?;
+            RotateViewPress { window, document_resets, xf: Xf::new(rect, view), start_angle: 0.0, start_rotation: view.rotation }
+        }
+    };
+    // A gesture cannot turn a different document/view or resume after its document was reset.
+    if (press.window, press.document_resets) != (window, document_resets) {
+        return Err("the Rotate View gesture's window or document changed".into());
+    }
+    let point = if screen { egui::pos2(position.x as f32, position.y as f32) } else { press.xf.to_screen(position) };
+    let center = press.xf.rect.center();
+    if !point.is_finite() || !center.is_finite() {
+        return Err("Rotate View needs finite canvas coordinates".into());
+    }
+    match kind {
+        PointerKind::Down => {
+            press.start_angle = (point.y - center.y).atan2(point.x - center.x) as f64;
+            app.control_rotate_press = Some(press);
+        }
+        PointerKind::Drag => {
+            app.view_mut().ok_or("no document")?.rotation =
+                crate::canvas::drag_rotation(center, point, press.start_angle, press.start_rotation, shift);
+        }
+        PointerKind::Up => {
+            app.control_rotate_press = None;
+        }
+        PointerKind::Move | PointerKind::DoubleClick => {}
+    }
+    Ok(())
+}
+
+/// A Rotate View packet accepts only the documented boolean modifier fields.
+fn validate_rotate_view_mods(value: Option<&Value>) -> Result<(), String> {
+    let Some(value) = value else { return Ok(()) };
+    let Some(fields) = value.as_object() else { return Err("Rotate View `mods` must be an object of booleans".into()) };
+    if fields.iter().any(|(key, value)| !matches!(key.as_str(), "shift" | "alt" | "cmd" | "ctrl" | "space") || !value.is_boolean()) {
+        return Err("Rotate View `mods` accepts only boolean shift, alt, cmd, ctrl and space".into());
+    }
+    Ok(())
+}
+
+/// Reject malformed coordinates and modifiers before any event can change the angle or press.
+fn validate_rotate_view_events(params: &Value, events: &[Value]) -> Result<(), String> {
+    validate_rotate_view_mods(params.get("mods"))?;
+    for event in events {
+        for axis in ["x", "y"] {
+            if event.get(axis).and_then(Value::as_f64).filter(|value| value.is_finite()).is_none() {
+                return Err(format!("Rotate View `{axis}` must be a finite number"));
+            }
+        }
+        validate_rotate_view_mods(event.get("mods"))?;
+        if event.get("space").is_some_and(|space| !matches!(space.as_str(), Some("doc" | "screen"))) {
+            return Err("Rotate View `space` must be doc or screen".into());
+        }
+    }
+    Ok(())
+}
+
 /// `ui.pointer`: pointer events through the tools.
 fn pointer_events(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    let rotating = app.session.tool_id() == "rotateView";
+    let before = if rotating { app.view().map(|view| view.rotation) } else { None };
+    let outcome = pointer_events_inner(app, ctx, req);
+    if rotating && matches!(&outcome, Outcome::Done(reply) if reply.get("ok").and_then(Value::as_bool) == Some(false)) {
+        // A failed packet must neither leave a partial turn nor allow a later drag to resume it.
+        app.control_rotate_press = None;
+        if let (Some(before), Some(view)) = (before, app.view_mut()) {
+            view.rotation = before;
+        }
+        ctx.request_repaint();
+    }
+    outcome
+}
+
+/// Apply a pointer packet after Rotate View validation; other tools retain their existing routing.
+fn pointer_events_inner(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
+    let rotating = app.session.tool_id() == "rotateView";
+    if rotating && let Err(error) = validate_rotate_view_events(p, events) {
+        return err(error);
+    }
     let base_mods: Mods = p.get("mods").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
     let view = app.view_info();
     let xf = app.canvas_rect.zip(app.view().copied()).map(|(rect, v)| Xf::new(rect, &v));
-    for e in events {
+    let from = app.session.input_count();
+    let held =
+        PointerEvent::json_backquote(p, false).and_then(|d| events.iter().map(|e| PointerEvent::json_backquote(e, d)).collect::<Result<Vec<_>, _>>());
+    let held = match held {
+        Ok(held) => held,
+        Err(e) => return err(e),
+    };
+    for (e, backquote) in events.iter().zip(held) {
         let kind = match e.get("kind").and_then(Value::as_str).unwrap_or("") {
             "down" => PointerKind::Down,
             "drag" => PointerKind::Drag,
@@ -551,6 +742,13 @@ fn pointer_events(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRe
         let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.0);
         let y = e.get("y").and_then(Value::as_f64).unwrap_or(0.0);
         let screen = e.get("space").and_then(Value::as_str) == Some("screen");
+        let mods = e.get("mods").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or(base_mods);
+        if rotating {
+            if let Err(e) = rotate_view_pointer(app, kind, vectorcraft_geom::Point::new(x, y), screen, mods.shift) {
+                return err(e);
+            }
+            continue;
+        }
         let pos = if screen {
             match xf {
                 Some(xf) => xf.to_doc(egui::pos2(x as f32, y as f32)),
@@ -559,13 +757,11 @@ fn pointer_events(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRe
         } else {
             vectorcraft_geom::Point::new(x, y)
         };
-        let mods = e.get("mods").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or(base_mods);
         // A tilt given in screen axes leans the same way on the page as on the screen.
         let pen = PointerEvent::json_pen(e).map(|q| match xf {
             Some(xf) if screen => crate::canvas::pose_on_page(q, &xf),
             _ => q,
         });
-        let backquote = e.get("backquote").and_then(Value::as_bool).unwrap_or_else(|| p.get("backquote").and_then(Value::as_bool).unwrap_or(false));
         crate::canvas::dispatch(app, &PointerEvent { kind, pos, mods, backquote, pressure: PointerEvent::json_pressure(e), pen }, view);
         let hold = PointerEvent::json_hold(e);
         if hold > 0.0 {
@@ -574,7 +770,15 @@ fn pointer_events(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRe
         }
     }
     ctx.request_repaint();
-    wrap(app.run("document.inspect", json!({})).map(|d| json!({"selection": d["selection"], "key": d["key"], "tool": app.session.tool_id()})))
+    // A Shape Builder merge of a large selection is computed on another thread, and the
+    // reply to the events that started it waits for it without holding the frames up. A
+    // gesture sent while it is computed is made after it, and its reply waits until then;
+    // a hover is answered at once.
+    let to = app.session.input_count();
+    if !app.session.input_applied(from, to) {
+        return Outcome::AfterToolEdit { from, to, document: app.session.active().map(|d| d.uid) };
+    }
+    Outcome::Done(pointer_reply(app))
 }
 
 /// `ui.click` and `ui.drag`: pointer input through egui itself.

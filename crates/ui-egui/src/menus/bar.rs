@@ -42,6 +42,10 @@ pub fn menu_bar(app: &mut VectorcraftApp, ui: &mut egui::Ui) -> f32 {
             (ui.cursor().min.x, switch_on_hover(ui.ctx(), &titles))
         })
         .inner;
+    // Whether a top-level menu is open: the docking renderer lowers the floating panels' OS windows
+    // while one is, or the menu would open under them.
+    ctx.data_mut(|d| d.insert_temp(menu_open_id(), open));
+
     let field = ctx.data(|d| d.get_temp::<Field>(field_key));
     if !open && focused_text_field(&ctx).is_none() {
         ctx.data_mut(|d| d.remove::<Field>(field_key));
@@ -56,6 +60,17 @@ pub fn menu_bar(app: &mut VectorcraftApp, ui: &mut egui::Ui) -> f32 {
         }
     }
     end
+}
+
+/// Where the menu bar keeps whether one of its top-level menus is open.
+fn menu_open_id() -> egui::Id {
+    egui::Id::unique("menu-bar-open")
+}
+
+/// Whether a menu of the in-window menu bar is open (`false` when no menu bar was drawn yet).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn menu_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(menu_open_id())).unwrap_or(false)
 }
 
 /// Whether the pointer at `p` is really over the menu title `title`: inside it, and with no
@@ -112,13 +127,20 @@ pub(super) fn render_items(app: &VectorcraftApp, ui: &mut egui::Ui, items: &[Ite
                 ui.menu_button(label, |ui| {
                     widgets::menu_scroll(ui, |ui| {
                         ui.set_min_width(200.0);
-                        render_items(app, ui, children, checks, clicked);
+                        render_items(app, ui, children, checks || only_toggles(app, children), clicked);
                     });
                 });
             }
             Entry::Item(row) => render_row(app, ui, &row, checks, clicked),
         }
     }
+}
+
+/// Whether every item of a submenu can be on or off: a menu drawn without check marks (the canvas
+/// context menu) still shows them there, since its label alone can't say whether it is on.
+fn only_toggles(app: &VectorcraftApp, items: &[Item]) -> bool {
+    let mut rows = items.iter().filter_map(|it| entry(app, it)).filter(|e| !matches!(e, Entry::Sep)).peekable();
+    rows.peek().is_some() && rows.all(|e| matches!(e, Entry::Item(r) if r.checked.is_some()))
 }
 
 /// One menu item: its label (with a check mark, or the room for one, under `checks`), its shortcut,
