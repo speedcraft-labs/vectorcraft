@@ -11,7 +11,7 @@
 //!   folder, the rest of the path being plain names (`..` below a missing folder is refused, and so
 //!   is a link that leads nowhere).
 //! - The result must lie inside one of the roots of its kind, compared by whole components
-//!   (`/work2` isn't inside `/work`), without regard to case on Windows.
+//!   (`/work2` isn't inside `/work`), exactly apart from the case of a Windows drive or share prefix.
 //! - Read and write access are separate: a root given alone grants only its own kind of access.
 //!
 //! Roots are in force on a thread inside [`confine`], and in the whole process after
@@ -208,7 +208,40 @@ pub fn check_read(path: &str) -> Result<(), String> {
 
 /// May `path` be written here? Always, without roots in force.
 pub fn check_write(path: &str) -> Result<(), String> {
-    current().map_or(Ok(()), |r| r.check(path, Access::Write))
+    current().map_or(Ok(()), |r| r.check(path, Access::Write))?;
+    WRITES.with(|w| {
+        if let Some(paths) = w.borrow_mut().as_mut()
+            && !paths.iter().any(|(p, _)| p == path)
+        {
+            paths.push((path.to_string(), stamp(path)));
+        }
+    });
+    Ok(())
+}
+
+/// A file's modification time and length; `None` when there is no file at `path`.
+type Stamp = Option<(Option<std::time::SystemTime>, u64)>;
+
+fn stamp(path: &str) -> Stamp {
+    std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file).map(|m| (m.modified().ok(), m.len()))
+}
+
+thread_local! {
+    /// The paths [`check_write`] allowed on this thread while they are being recorded, each with
+    /// its file's stamp at that moment.
+    static WRITES: std::cell::RefCell<Option<Vec<(String, Stamp)>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Starts recording the paths [`check_write`] allows on this thread.
+pub(crate) fn start_recording_writes() {
+    WRITES.with(|w| *w.borrow_mut() = Some(Vec::new()));
+}
+
+/// Ends recording → the recorded paths whose file exists now: after a command that `succeeded`,
+/// all of them; after one that failed, those made or changed since they were allowed.
+pub(crate) fn finish_recording_writes(succeeded: bool) -> Vec<String> {
+    let recorded = WRITES.with(|w| w.borrow_mut().take()).unwrap_or_default();
+    recorded.into_iter().filter(|(path, before)| stamp(path).is_some_and(|now| succeeded || Some(now) != *before)).map(|(path, _)| path).collect()
 }
 
 /// `path` made absolute with its links followed; for a path that doesn't exist (yet), its nearest
@@ -260,7 +293,7 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
 }
 
 /// Is `path` (resolved) `root` or inside it, component by component (without regard to case in a
-/// Windows drive prefix only: resolved folder names have their real case, and a folder that differs
+/// Windows drive or share prefix only: resolved folder names have their real case, and a folder that differs
 /// in case alone may be another, on a case-sensitive Windows folder)?
 fn inside(path: &Path, root: &Path) -> bool {
     let mut path = path.components();
@@ -280,10 +313,11 @@ fn same_component(a: Component, b: Component) -> bool {
     }
 }
 
-/// A Windows device name (`CON`, `NUL`, `COM1`… also with an extension), which names no file.
+/// A Windows device name (`CON`, `NUL`, `COM1`, `COM¹`… also with an extension), which names no file.
 pub(crate) fn is_device_name(component: &str) -> bool {
     let stem = component.split('.').next().unwrap_or(component).trim_end_matches(' ').to_ascii_uppercase();
-    let numbered = |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
+    let numbered =
+        |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"));
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$") || numbered("COM") || numbered("LPT")
 }
 
@@ -499,6 +533,8 @@ mod tests {
         let e = roots.check(&s(base.join("out/NUL")), Access::Write).unwrap_err();
         assert!(e.contains("reserved device names"), "{e}");
         assert!(roots.check(&s(base.join("out/com1.txt")), Access::Write).is_err());
+        let e = roots.check(&s(base.join("out/COM¹.txt")), Access::Write).unwrap_err();
+        assert!(e.contains("reserved device names"), "{e}");
         assert_eq!(roots.check(&s(base.join("out/console.txt")), Access::Write), Ok(()));
         let _ = std::fs::remove_dir_all(base);
     }
@@ -527,10 +563,10 @@ mod tests {
 
     #[test]
     fn device_names() {
-        for d in ["CON", "nul", "Com1", "LPT9.txt", "aux.svg", "NUL "] {
+        for d in ["CON", "nul", "Com1", "LPT9.txt", "aux.svg", "NUL ", "COM¹", "Lpt²", "lpt³.txt"] {
             assert!(is_device_name(d), "{d}");
         }
-        for f in ["console", "com10", "COM0", "lpt", "a.svg", "nul-x"] {
+        for f in ["console", "com10", "COM0", "lpt", "a.svg", "nul-x", "COM⁴", "com¹0", "lpt¹x"] {
             assert!(!is_device_name(f), "{f}");
         }
     }
