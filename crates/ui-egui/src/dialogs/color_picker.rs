@@ -115,6 +115,23 @@ impl Channel {
             Channel::Blue => (2, 0, 1),
         }
     }
+    /// The color field's axes (across, up) as keys and screen readers see them: hue in degrees,
+    /// saturation and brightness in percent, red, green and blue from 0 to 255.
+    fn field_axes(self) -> [widgets::FieldAxis<'static>; 2] {
+        let axis = |i: usize| {
+            let (name, units, suffix) = match (self.is_hsb(), i) {
+                (true, 0) => (tl!("Hue"), 360.0, "°"),
+                (true, 1) => (tl!("Saturation"), 100.0, "%"),
+                (true, _) => (tl!("Brightness"), 100.0, "%"),
+                (false, 0) => (tl!("Red"), 255.0, ""),
+                (false, 1) => (tl!("Green"), 255.0, ""),
+                (false, _) => (tl!("Blue"), 255.0, ""),
+            };
+            widgets::FieldAxis { name, units, suffix }
+        };
+        let (_, x, y) = self.axes();
+        [axis(x), axis(y)]
+    }
 }
 
 /// The picked colour with its HSB (hue in degrees), kept so the hue survives grey colours.
@@ -249,6 +266,23 @@ pub fn open(app: &mut VectorcraftApp, p: &Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+/// The field of a Color Picker opened over a command dialog ([`over_effect`]): the dialog's colour
+/// field its OK fills.
+const COLOUR_FIELD: &str = "__colourField";
+
+/// The Color Picker over the command dialog `parent`, on `colour`, that fills the dialog's `field`
+/// with its OK and goes back to it, as Cancel does. It previews nothing itself: the dialog's own
+/// preview shows the colour once it is back.
+pub(super) fn over_effect(parent: &Dialog, field: &str, colour: Color) -> Dialog {
+    let mut d = Dialog::new(
+        KIND,
+        json!({"original": color_json(&colour), "channel": Channel::default().id(), "webOnly": false, "swatches": false, COLOUR_FIELD: field}),
+    );
+    d.fields.insert(super::PARENT.into(), serde_json::to_value(parent).unwrap_or_default());
+    store(&mut d, &Picked::of(colour));
+    d
+}
+
 /// The field of a Color Picker opened over Recolor Artwork ([`over_recolor`]): the row whose new
 /// color it picks.
 const RECOLOR_ROW: &str = "__recolorRow";
@@ -350,7 +384,9 @@ fn body(app: &mut VectorcraftApp, ui: &mut Ui, d: &mut Dialog) -> DialogAction {
                         } else {
                             let (z, x, y) = field_pos(channel, &p);
                             let at = |x: f32, y: f32| c32(&field_pick(channel, z, x, y).snapped(web).color);
-                            if let (Some((x, y)), _) = widgets::color_field(ui, "cp-field", vec2(side, side), (x, y), &at) {
+                            if let (Some((x, y)), _) =
+                                widgets::color_field(ui, "cp-field", (tl!("Color field"), channel.field_axes()), vec2(side, side), (x, y), true, &at)
+                            {
                                 pick = Some(field_pick(channel, z, x, y));
                             }
                             ui.add_space(SLIDER_GAP);
@@ -433,8 +469,9 @@ fn body(app: &mut VectorcraftApp, ui: &mut Ui, d: &mut Dialog) -> DialogAction {
 /// Opened for an artboard, the picker shows the color on that artboard's paper, with or without a
 /// selection.
 fn preview(app: &mut VectorcraftApp, d: &mut Dialog) {
-    // Over Recolor Artwork the art shows that dialog's preview, which this one must not replace.
-    if d.fields.contains_key(RECOLOR_ROW) {
+    // Over Recolor Artwork the art shows that dialog's preview, which this one must not replace;
+    // over a command dialog this picker only fills a field, and the dialog previews it.
+    if d.fields.contains_key(RECOLOR_ROW) || d.fields.contains_key(COLOUR_FIELD) {
         return;
     }
     let (cmd, params) = paint_command(app, d);
@@ -632,6 +669,15 @@ fn swatch_list(app: &VectorcraftApp, ui: &mut Ui, current: &Color, side: f32) ->
 /// OK with the starting color unchanged and nothing previewed closes the picker and leaves the
 /// artboard as it was: without a background color, or with its color in its own color model.
 fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+    if let Some(field) = d.fields.get(COLOUR_FIELD).and_then(Value::as_str) {
+        let mut parent = super::parent(d).ok_or("the dialog it was opened over is no longer open")?;
+        parent.fields.insert(field.to_string(), json!(picked(d).color.to_hex()));
+        // The dialog previews the new colour when it comes back: end this picker's interaction, as
+        // Cancel does, so the dialog starts its preview afresh.
+        let _ = app.session.cancel_interaction();
+        app.ui.dialog = Some(parent);
+        return Ok(Value::Null);
+    }
     if let Some(row) = d.fields.get(RECOLOR_ROW).and_then(Value::as_u64) {
         let parent = super::parent(d).ok_or("Recolor Artwork is no longer open")?;
         let c = in_document_model(app, picked(d).color);

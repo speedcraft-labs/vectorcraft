@@ -1,7 +1,8 @@
 //! Type → Find Font…: the fonts the document uses (missing ones marked), Find (select the text
 //! using a font), Change / Change All to another font from the list Replace With Font From shows
 //! (the document's fonts, the recent fonts or every installed font), and Find in Folder… (the
-//! missing fonts' files, in the Missing Fonts dialog: `ui.findFontsInFolder`).
+//! missing fonts' files, in the Missing Fonts dialog: `ui.findFontsInFolder`). Find In limits Find
+//! to the active artboard or the selected layers.
 
 use egui::Ui;
 use serde_json::{Value, json};
@@ -23,9 +24,10 @@ pub fn open_on_missing(app: &mut VectorcraftApp) {
     open_at(app, first.unwrap_or(0));
 }
 
-/// Open the dialog with the document's font `selected` (an index into `text.fonts`) chosen, and
-/// System's font ([`system_family`]) to change to.
+/// Open the dialog with the document's font `selected` (an index into `text.fonts`) chosen,
+/// System's font ([`system_family`]) to change to, and the last Find In choice (Document at first).
 fn open_at(app: &mut VectorcraftApp, selected: usize) {
+    let find_in = FIND_IN.iter().find(|f| **f == app.ui.find_font_in).copied().unwrap_or("document");
     let used = fonts(app);
     let source = "system";
     let rows = replacement_rows(app, source, &used);
@@ -33,7 +35,7 @@ fn open_at(app: &mut VectorcraftApp, selected: usize) {
     let style = rows.iter().find(|r| r.family.eq_ignore_ascii_case(&family)).map(|r| r.style.clone()).unwrap_or_default();
     app.ui.dialog = Some(Dialog::new(
         "findFont",
-        json!({ "selected": selected, "family": family, "style": style, "selectionOnly": false, "replaceFrom": source, "rows": rows_json(&rows) }),
+        json!({ "selected": selected, "family": family, "style": style, "selectionOnly": false, "replaceFrom": source, "rows": rows_json(&rows), "findIn": find_in }),
     ));
 }
 
@@ -210,6 +212,42 @@ fn set_source(app: &VectorcraftApp, d: &mut Dialog, source: &str, used: &[Value]
     d.fields.insert("style".into(), json!(pick.map(|r| r.style.clone()).unwrap_or_default()));
 }
 
+/// Find In's choices (the `findIn` field): the whole document, the active artboard, or the layers
+/// highlighted in the Layers panel (else the current layer).
+const FIND_IN: [&str; 3] = ["document", "artboard", "layers"];
+const FIND_IN_LABELS: [&str; 3] = ["Document", "Artboard", "Layers"];
+
+/// The `scope` Find passes `select.font` for Find In choice `find_in`. A document without
+/// artboards, or without a layer to look in, is looked through whole.
+fn find_scope(app: &VectorcraftApp, find_in: &str) -> Value {
+    let Some(st) = app.session.active() else { return json!("document") };
+    let n = st.doc.artboards.len();
+    match find_in {
+        "artboard" if n > 0 => json!({ "artboards": [crate::panels::artboards::selected(app, n)] }),
+        "layers" => {
+            let is_layer = |id: &vectorcraft_doc::NodeId| st.doc.node(*id).is_some_and(vectorcraft_doc::Node::is_layer);
+            let mut layers: Vec<u64> = st.highlighted_rows().into_iter().filter(is_layer).map(|id| id.0).collect();
+            if layers.is_empty() {
+                layers.extend(st.current_layer().map(|id| id.0));
+            }
+            if layers.is_empty() { json!("document") } else { json!({ "layers": layers }) }
+        }
+        _ => json!("document"),
+    }
+}
+
+/// Run the dialog's button `button` (find, change or changeAll) on the document font `from`.
+fn run_button(app: &mut VectorcraftApp, d: &Dialog, button: &str, from: &Value) -> Result<Value, String> {
+    match button {
+        "find" => {
+            let scope = find_scope(app, &d.str("findIn"));
+            app.run("select.font", json!({ "family": from["family"], "style": from["style"], "scope": scope }))
+        }
+        "change" => change(app, d, from, false),
+        _ => change(app, d, from, true),
+    }
+}
+
 fn fonts(app: &mut VectorcraftApp) -> Vec<Value> {
     app.session.execute("text.fonts", &json!({})).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default()
 }
@@ -342,6 +380,14 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
             }
         }
         ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            widgets::field_label(ui, tl!("Find In"));
+            let at = FIND_IN.iter().position(|s| *s == d.str("findIn")).unwrap_or(0);
+            if let Some(i) = widgets::dropdown_named(ui, "ff-find-in", Some(tl!("Find In")), FIND_IN_LABELS[at], &FIND_IN_LABELS, 120.0) {
+                d.fields.insert("findIn".into(), json!(FIND_IN[i]));
+            }
+        });
+        ui.add_space(6.0);
         // An empty list (Recent before any font was applied) leaves nothing to change to.
         let replace = sel < list.len() && can_replace(&d, families.as_deref());
         ui.horizontal(|ui| {
@@ -362,14 +408,10 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
             });
         });
     });
+    app.ui.find_font_in = d.str("findIn");
     let sel = d.fields.get("selected").and_then(Value::as_u64).unwrap_or(0) as usize;
     if let (Some(a), Some(from)) = (act, list.get(sel)) {
-        let r = match a {
-            "find" => app.run("select.font", json!({ "family": from["family"], "style": from["style"] })),
-            "change" => change(app, &d, from, false),
-            _ => change(app, &d, from, true),
-        };
-        match r {
+        match run_button(app, &d, a, from) {
             // The rows are a snapshot: the document's fonts and the recent fonts have moved on.
             Ok(_) if a != "find" => {
                 let used = fonts(app);
@@ -433,6 +475,48 @@ mod tests {
         assert_eq!(fonts(&mut app)[0]["family"], "Source Sans 3");
     }
 
+    /// Find In passes Find the active artboard, or the selected layers (else the current
+    /// layer), as `select.font`'s scope.
+    #[test]
+    fn find_in_limits_find_to_the_artboard_or_the_layers() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("artboard.new", &json!({"x": 200, "y": 0, "width": 100, "height": 100})).unwrap();
+        let text = |app: &mut VectorcraftApp, x: i32| {
+            app.session.execute("text.create", &json!({"x": x, "y": 40, "text": "Hi", "font": "Inter"})).unwrap()["id"].as_u64().unwrap()
+        };
+        let first = text(&mut app, 10);
+        let layer = app.session.execute("layer.new", &json!({})).unwrap()["id"].as_u64().unwrap();
+        let second = text(&mut app, 210);
+        let third = text(&mut app, 20);
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        // Choose Find In on the open dialog, draw a frame, then press Find.
+        let find = |app: &mut VectorcraftApp, find_in: &str| {
+            open(app);
+            app.ui.dialog.as_mut().unwrap().fields.insert("findIn".into(), json!(find_in));
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx()));
+            out.textures_delta.clear();
+            let d = app.ui.dialog.clone().unwrap();
+            let from = fonts(app).into_iter().find(|f| f["family"] == "Inter").unwrap();
+            run_button(app, &d, "find", &from).unwrap();
+            let mut ids: Vec<u64> = app.session.active().unwrap().selection.objects.iter().map(|id| id.0).collect();
+            ids.sort_unstable();
+            ids
+        };
+        open(&mut app);
+        assert_eq!(app.ui.dialog.as_ref().unwrap().str("findIn"), "document");
+        assert_eq!(find(&mut app, "document"), [first, second, third]);
+        // Without a view, the active artboard is the first.
+        assert_eq!(find(&mut app, "artboard"), [first, third]);
+        assert_eq!(find_scope(&app, "layers"), json!({ "layers": [layer] }));
+        assert_eq!(find(&mut app, "layers"), [second, third]);
+        // Closing and opening the dialog again keeps the last choice.
+        app.ui.dialog = None;
+        open(&mut app);
+        assert_eq!(app.ui.dialog.as_ref().unwrap().str("findIn"), "layers");
+    }
+
     /// Change All leaves locked text in its font, and the status bar says so.
     #[test]
     fn change_all_clears_the_skip_warning_after_unlocking_text() {
@@ -448,7 +532,7 @@ mod tests {
         assert_eq!(fonts(&mut app)[0]["family"], "Missing Family");
         assert_eq!(app.ui.status, "some text is hidden or locked, so its font wasn't replaced");
         app.run("object.unlockAll", json!({})).unwrap();
-        assert_eq!(app.ui.status, "some text is hidden or locked, so its font wasn't replaced");
+        assert_eq!(app.ui.status, "", "unlocking the skipped text clears the warning");
         let r = change(&mut app, &d, &from, true).unwrap();
         assert_eq!(r["runs"], 1, "{r}");
         assert!(r.get("warning").is_none(), "{r}");
@@ -457,6 +541,258 @@ mod tests {
         let r = app.run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}})).unwrap();
         assert_eq!(r["runs"], 0, "{r}");
         assert_eq!(app.ui.status, "Saved another document");
+    }
+
+    #[test]
+    fn replacement_keeps_only_font_warnings_that_still_apply() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Hi", "font": "Missing Family"})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 70, "text": "Bye", "font": "Missing Family"})).unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 90, "text": "Other", "font": "Inter"})).unwrap();
+
+        let replace = |app: &mut VectorcraftApp, from: &str, from_style: Option<&str>, style: &str| {
+            app.run("text.replaceFont", json!({"from": {"family": from, "style": from_style}, "to": {"family": "Source Sans 3", "style": style}}))
+                .unwrap()
+        };
+        let first = replace(&mut app, "Missing Family", Some("Regular"), "Black Wide");
+        assert_eq!(first["runs"], 1, "{first}");
+        assert_eq!(first["skipped"], 1, "{first}");
+        let style_warning = first["warning"].as_str().unwrap().split_once("; ").unwrap().1.to_string();
+        assert!(style_warning.contains("Source Sans 3 Black Wide is drawn in Source Sans 3"), "{style_warning}");
+
+        let unrelated = replace(&mut app, "Inter", None, "Regular");
+        assert_eq!(unrelated["runs"], 1, "{unrelated}");
+        assert!(unrelated.get("warning").is_none(), "{unrelated}");
+        assert_eq!(app.ui.status, first["warning"].as_str().unwrap());
+
+        app.run("object.unlockAll", json!({})).unwrap();
+        let second = replace(&mut app, "Missing Family", None, "Regular");
+        assert_eq!(second["runs"], 1, "{second}");
+        assert!(second.get("warning").is_none(), "{second}");
+        assert_eq!(app.ui.status, style_warning);
+
+        let third = replace(&mut app, "Source Sans 3", Some("Black Wide"), "Regular");
+        assert_eq!(third["runs"], 1, "{third}");
+        assert!(third.get("warning").is_none(), "{third}");
+        assert_eq!(app.ui.status, "");
+    }
+
+    #[test]
+    fn a_style_specific_retry_clears_a_family_wide_skipped_warning() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Hi", "font": "Missing Family"})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 70, "text": "Bye", "font": "Missing Family"})).unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        let first = app
+            .run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3", "style": "Regular"}}))
+            .unwrap();
+        assert_eq!((first["runs"].as_u64(), first["skipped"].as_u64()), (Some(1), Some(1)));
+        app.run("object.unlockAll", json!({})).unwrap();
+        let second = app
+            .run(
+                "text.replaceFont",
+                json!({"from": {"family": "Missing Family", "style": "Regular"}, "to": {"family": "Source Sans 3", "style": "Regular"}}),
+            )
+            .unwrap();
+        assert_eq!(second["runs"], 1, "{second}");
+        assert!(second.get("warning").is_none(), "{second}");
+        assert_eq!(app.ui.status, "");
+    }
+
+    #[test]
+    fn new_text_in_the_source_font_does_not_keep_an_old_skip_warning() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let replace = |app: &mut VectorcraftApp, from: &str, style: &str| {
+            app.run("text.replaceFont", json!({"from": {"family": from}, "to": {"family": "Source Sans 3", "style": style}})).unwrap()
+        };
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 30, "text": "Editable", "font": "Missing Family"})).unwrap();
+        let skipped = app.session.execute("text.create", &json!({"x": 10, "y": 60, "text": "Locked", "font": "Missing Family"})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        let first = replace(&mut app, "Missing Family", "Regular");
+        assert_eq!((first["runs"].as_u64(), first["skipped"].as_u64()), (Some(1), Some(1)));
+        app.session.execute("text.create", &json!({"x": 10, "y": 90, "text": "New", "font": "Missing Family"})).unwrap();
+        app.run("object.unlockAll", json!({})).unwrap();
+        app.session.active_mut().unwrap().selection.objects = vec![vectorcraft_doc::NodeId(skipped)];
+        let second = app
+            .run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}, "selectionOnly": true}))
+            .unwrap();
+        assert_eq!(second["runs"], 1, "{second}");
+        assert!(second.get("warning").is_none(), "{second}");
+        assert_eq!(app.ui.status, "");
+        assert!(fonts(&mut app).iter().any(|font| font["family"] == "Missing Family"));
+    }
+
+    #[test]
+    fn unlocking_skipped_text_clears_its_warning() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 30, "text": "Other", "font": "Inter"})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 60, "text": "Locked", "font": "Missing Family"})).unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        let first = app.run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}})).unwrap();
+        assert_eq!(first["skipped"], 1);
+        app.run("object.unlockAll", json!({})).unwrap();
+        assert_eq!(app.ui.status, "");
+        let unrelated = app.run("text.replaceFont", json!({"from": {"family": "Inter"}, "to": {"family": "Source Sans 3"}})).unwrap();
+        assert_eq!(unrelated["runs"], 1);
+        assert_eq!(app.ui.status, "");
+    }
+
+    #[test]
+    fn a_document_revision_refreshes_the_skip_warning_on_tick() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 60, "text": "Locked", "font": "Missing Family"})).unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        let first = app.run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}})).unwrap();
+        assert_eq!(first["skipped"], 1);
+        assert!(!app.ui.status.is_empty());
+
+        app.session.execute("object.unlockAll", &json!({})).unwrap();
+        let ctx = egui::Context::default();
+        app.begin_host_iteration();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| app.tick(ui.ctx()));
+        out.textures_delta.clear();
+        assert_eq!(app.ui.status, "");
+    }
+
+    #[test]
+    fn a_selection_only_retry_ignores_unselected_text_in_the_same_font() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Outside", "font": "Missing Family"})).unwrap();
+        let selected = app.session.execute("text.create", &json!({"x": 10, "y": 70, "text": "Selected", "font": "Missing Family"})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        app.session.active_mut().unwrap().selection.objects = vec![vectorcraft_doc::NodeId(selected)];
+        let params = json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}, "selectionOnly": true});
+        let first = app.run("text.replaceFont", params.clone()).unwrap();
+        assert_eq!((first["runs"].as_u64(), first["skipped"].as_u64()), (Some(0), Some(1)));
+        app.run("object.unlockAll", json!({})).unwrap();
+        app.session.active_mut().unwrap().selection.objects = vec![vectorcraft_doc::NodeId(selected)];
+        let second = app.run("text.replaceFont", params).unwrap();
+        assert_eq!(second["runs"], 1, "{second}");
+        assert!(second.get("warning").is_none(), "{second}");
+        assert_eq!(app.ui.status, "");
+        assert!(app.session.execute("text.fonts", &json!({})).unwrap().as_array().unwrap().iter().any(|font| font["family"] == "Missing Family"));
+    }
+
+    #[test]
+    fn a_changed_selection_keeps_the_original_warning_scope() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 30, "text": "Outside", "font": "Missing Family"})).unwrap();
+        let added = app.session.execute("text.create", &json!({"x": 10, "y": 60, "text": "Added", "font": "Missing Family"})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let skipped = app.session.execute("text.create", &json!({"x": 10, "y": 90, "text": "Locked", "font": "Missing Family"})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        app.session.active_mut().unwrap().selection.objects = vec![vectorcraft_doc::NodeId(skipped)];
+        let params = json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}, "selectionOnly": true});
+        let first = app.run("text.replaceFont", params.clone()).unwrap();
+        assert_eq!(first["skipped"], 1, "{first}");
+        app.run("object.unlockAll", json!({})).unwrap();
+        app.session.active_mut().unwrap().selection.objects = vec![vectorcraft_doc::NodeId(skipped), vectorcraft_doc::NodeId(added)];
+        let second = app.run("text.replaceFont", params).unwrap();
+        assert_eq!(second["runs"], 2, "{second}");
+        assert!(second.get("warning").is_none(), "{second}");
+        assert_eq!(app.ui.status, "");
+        assert!(app.session.execute("text.fonts", &json!({})).unwrap().as_array().unwrap().iter().any(|font| font["family"] == "Missing Family"));
+    }
+
+    #[test]
+    fn changing_selection_does_not_clear_a_skipped_font_warning() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        let selected = app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Locked", "font": "Missing Family"})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        app.session.active_mut().unwrap().selection.objects = vec![vectorcraft_doc::NodeId(selected)];
+        let first = app
+            .run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}, "selectionOnly": true}))
+            .unwrap();
+        assert_eq!(first["skipped"], 1, "{first}");
+        let warning = app.ui.status.clone();
+        app.session.execute("text.create", &json!({"x": 10, "y": 70, "text": "Other", "font": "Inter"})).unwrap();
+        let unrelated =
+            app.run("text.replaceFont", json!({"from": {"family": "Inter"}, "to": {"family": "Source Sans 3"}, "selectionOnly": true})).unwrap();
+        assert_eq!(unrelated["runs"], 1, "{unrelated}");
+        assert!(unrelated.get("warning").is_none(), "{unrelated}");
+        assert_eq!(app.ui.status, warning);
+        app.run("object.unlockAll", json!({})).unwrap();
+        let retry = app.run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}})).unwrap();
+        assert_eq!(retry["runs"], 1, "{retry}");
+        assert!(retry.get("warning").is_none(), "{retry}");
+        assert_eq!(app.ui.status, "");
+    }
+
+    #[test]
+    fn replacing_a_font_in_another_document_keeps_the_original_warning() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Locked", "font": "Missing Family"})).unwrap();
+        app.session.execute("object.lock", &json!({})).unwrap();
+        let first = app.run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3"}})).unwrap();
+        assert_eq!(first["skipped"], 1, "{first}");
+        let warning = app.ui.status.clone();
+        let original_uid = app.session.active().unwrap().uid;
+
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Other", "font": "Inter"})).unwrap();
+        let second = app.run("text.replaceFont", json!({"from": {"family": "Inter"}, "to": {"family": "Source Sans 3"}})).unwrap();
+        assert_eq!(second["runs"], 1, "{second}");
+        assert_eq!(app.ui.status, warning);
+        app.session.set_active(0);
+        assert_eq!(app.session.active().unwrap().uid, original_uid);
+        assert_eq!(app.ui.status, warning);
+    }
+
+    #[test]
+    fn a_comma_in_a_substituted_style_keeps_its_warning() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Hi", "font": "Missing Family"})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 70, "text": "Other", "font": "Inter"})).unwrap();
+        let first = app
+            .run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3", "style": "Black, Wide"}}))
+            .unwrap();
+        let warning = first["warning"].as_str().unwrap().to_string();
+        assert!(warning.contains("Black, Wide"), "{warning}");
+        let unrelated = app.run("text.replaceFont", json!({"from": {"family": "Inter"}, "to": {"family": "Source Serif 4"}})).unwrap();
+        assert_eq!(unrelated["runs"], 1, "{unrelated}");
+        assert!(unrelated.get("warning").is_none(), "{unrelated}");
+        assert_eq!(app.ui.status, warning);
+    }
+
+    #[test]
+    fn an_unrelated_substituted_style_does_not_keep_a_resolved_warning() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "Hi", "font": "Missing Family"})).unwrap();
+        app.session.execute("text.create", &json!({"x": 10, "y": 70, "text": "Other", "font": "Inter"})).unwrap();
+        app.run("text.replaceFont", json!({"from": {"family": "Inter"}, "to": {"family": "Source Sans 3", "style": "Narrow"}})).unwrap();
+        let first = app
+            .run("text.replaceFont", json!({"from": {"family": "Missing Family"}, "to": {"family": "Source Sans 3", "style": "Black, Wide"}}))
+            .unwrap();
+        assert!(first["warning"].as_str().is_some_and(|warning| warning.contains("Black, Wide")), "{first}");
+        let resolved = app
+            .run(
+                "text.replaceFont",
+                json!({"from": {"family": "Source Sans 3", "style": "Black, Wide"}, "to": {"family": "Inter", "style": "Regular"}}),
+            )
+            .unwrap();
+        assert!(resolved.get("warning").is_none(), "{resolved}");
+        assert_eq!(app.ui.status, "");
     }
 
     #[test]
@@ -753,7 +1089,8 @@ mod tests {
         let system = replacement_rows(&app, "system", &used);
         assert!(system.iter().any(|r| r.family == "Source Sans 3" && r.style == "Regular"), "{system:?}");
         assert!(!system.iter().any(|r| r.family.starts_with('.')), "the font menu's hidden families stay out");
-        assert!(system.iter().all(|r| !r.style.is_empty()), "no nameless rows: {system:?}");
+        // A composite font is a family without styles of its own, listed by its name alone.
+        assert!(system.iter().all(|r| !r.style.is_empty() || db.styles(&r.family).is_empty()), "no nameless rows: {system:?}");
         let menu = db.menu_family_list();
         let listed: std::collections::BTreeSet<&str> = system.iter().map(|r| r.family.as_str()).collect();
         assert_eq!(listed.len(), menu.len(), "every family the font menu shows is listed");
