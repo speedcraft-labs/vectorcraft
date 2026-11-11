@@ -3444,8 +3444,6 @@ fn the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported() {
     use vectorcraft_text::test_fonts::{MATRA_FAMILY, alternates_family, alternates_font, matra_font};
     let _fonts = crate::adding_fonts();
     let db = vectorcraft_text::FontDb::global();
-    // This test supplies its own faces; do not lazy-load a host font during the lookup.
-    db.set_system_fallback(false);
     db.add_font(alternates_font(true).expect("the test font builds"));
     db.add_font(matra_font().expect("the test font builds"));
     let requested = db.face(alternates_family(true), "Regular").expect("the test face");
