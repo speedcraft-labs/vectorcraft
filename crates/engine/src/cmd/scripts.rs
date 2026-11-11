@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Run Script",
             [],
             None,
-            "{path?: a .js or .jsx file | source?: the script's text (exactly one of the two), name?: the name errors and the report use (default: the path's file name, or \"script\"), args?: {…} (at most 1 MiB as JSON; vc.args in the script), answers?: {} (no prompts exist yet: only an empty object is taken), maxFuel?: whole number from 1 to 100000000000 (instructions in all; default 1000000000)} run a JavaScript file against the open documents, through the vc object: vc.run(id, params) runs a command and returns its result, a failed command throws an error the script can catch and puts back the documents and the session state it changed, while any file it wrote stays written and is named; vc.document is a snapshot of the active document or null; vc.commands lists the commands a script may run; vc.log(value) adds to the report; vc.args is args; vc.api.version and vc.api.has(feature) describe the API. The run is one transaction: on success each changed document gets one undo step, Run Script, and each preference it changed keeps its value, and on an uncaught error, a limit or script.stop every open document and the session go back as they were; files a command wrote before that stay written and are named. While it runs, other commands that change anything end with a busy error. Commands that change anything outside the documents (script.*, except script.check, plugin.*, prefs.*, actionSet.*, shortcutSet.*, help.*, print.*, library.*, importMatches.*, edit.undoGroup.*, file.recovery.*, stroke.widthProfile.*, saving, importing or deleting a preset, text.addFontFiles, text.findFontFiles, text.rescanFonts, links.findFiles, file.place.queue, color.loadProfile, color.removeProfile, file.print, view.proofSetup, view.proofColors, view.overprintPreview, view.separationsPreview) throw. VectorCraft's own limits: 8 MiB of source, 256 MiB of heap (128 MiB on the web), 2000000 host calls, 200000000 instructions without a pause, 64 levels, 16 MiB and 1048576 entries for a value crossing to or from a command, 10000 log entries and 4 MiB of log, and 100000 objects and 512 MiB of new document data, past which a person is asked to continue or stop and a run with nobody to ask ends → {ok: true, name, changed: [document names], written: [paths], log: [values], fuelUsed, hostCalls}, or, in the app, {running: true, name} and the report later in ui.inspect's scriptReport",
+            "{path?: a .js or .jsx file | source?: the script's text (exactly one of the two), name?: the name errors and the report use (default: the path's file name, or \"script\"), args?: {…} (at most 1 MiB as JSON; vc.args in the script), answers?: {} (no prompts exist yet: only an empty object is taken), maxFuel?: whole number from 1 to 100000000000 (instructions in all; default 1000000000)} run a JavaScript file against the open documents, through the vc object: vc.run(id, params) runs a command and returns its result, a failed command throws an error the script can catch and puts back the documents and the session state it changed, while any file it wrote stays written and is named; vc.document is a snapshot of the active document or null; vc.commands lists the commands a script may run; vc.log(value) adds to the report and the Script Console (script.console); $.write(...values) writes the values to the Script Console as String(value) gives them, and $.writeln(...values) does the same and ends the line; vc.args is args; vc.api.version and vc.api.has(feature) describe the API. The run is one transaction: on success each changed document gets one undo step, Run Script, and each preference it changed keeps its value, and on an uncaught error, a limit or script.stop every open document and the session go back as they were; files a command wrote before that stay written and are named. While it runs, other commands that change anything end with a busy error. Commands that change anything outside the documents (script.*, except script.check, plugin.*, prefs.*, actionSet.*, shortcutSet.*, help.*, print.*, library.*, importMatches.*, edit.undoGroup.*, file.recovery.*, stroke.widthProfile.*, saving, importing or deleting a preset, text.addFontFiles, text.findFontFiles, text.rescanFonts, links.findFiles, file.place.queue, color.loadProfile, color.removeProfile, file.print, view.proofSetup, view.proofColors, view.overprintPreview, view.separationsPreview) throw. VectorCraft's own limits: 8 MiB of source, 256 MiB of heap (128 MiB on the web), 2000000 host calls, 200000000 instructions without a pause, 64 levels, 16 MiB and 1048576 entries for a value crossing to or from a command, 10000 log entries and 4 MiB of log, and 100000 objects and 512 MiB of new document data, past which a person is asked to continue or stop and a run with nobody to ask ends → {ok: true, name, changed: [document names], written: [paths], log: [values], fuelUsed, hostCalls, runTimeMs (the time the script ran, its commands included, waits between frames and for a person's answer left out; 0 without a clock), timingAvailable (false on the web), hostCallCounts: {vcRun, documentReads, commandListReads, vcLog, consoleWrites}, slowestCommands: [{id, calls, totalMs, maxMs}] (at most 5, the longest in all first, then by id), console: {lines: [text], droppedLines, truncatedLines} (the run's own output, vc.log lines and error)}, or, in the app, {running: true, name} and the report later in ui.inspect's scriptReport; a run that fails ends with its error, and its report there also has kind, message, line, column, fuelLeft, fuelUsed, hostCalls and the fields above",
             always,
             run
         ),
@@ -44,6 +44,33 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} stop the running script, which puts every document back as it was before the run; asking again while it stops is harmless → {stopped: whether a script was running}",
             always,
             stop
+        ),
+        cmd!(
+            query "script.console",
+            "Script Console",
+            [],
+            None,
+            "{} the Script Console's lines, oldest first: each run's start, its $.write and $.writeln output, its vc.log entries, its uncaught error as name:line:column: message, its end and a report of its time, host calls and slowest commands; a session keeps at most 2048 lines and 1 MiB of text, dropping the oldest, a line at most 4096 bytes and a script's name in its lines at most 256 bytes, each cut with … (VectorCraft's own limits); line feeds, carriage returns and the two together break lines, other control characters show as their Unicode Control Pictures → {lines: [{run: the run's number in the session, name, kind: start|output|log|error|end|report, text}], droppedLines, truncatedLines} (an end line's text is ended: finished|error|fuel|hostLimit|limit|stopped|internal)",
+            always,
+            console_lines
+        ),
+        cmd!(
+            query "script.console.clear",
+            "Clear Script Console",
+            [],
+            None,
+            "{} empty the Script Console and set its dropped and cut counts to zero; a running script goes on writing, and scriptReport keeps the last run's console → {cleared: lines removed}",
+            always,
+            console_clear
+        ),
+        cmd!(
+            query "script.listInstalled",
+            "List Installed Scripts",
+            [],
+            None,
+            "{} list the .js and .jsx files of the Scripts folder next to the settings, which File › Scripts lists, each subfolder as a submenu, in menu order; only names are read, never a script's text; links, hidden files, names starting with a dot and folders without a script are left out. VectorCraft's own limits: 2048 folder entries looked at, 512 scripts, 128 subfolders, 4 levels of subfolders, names of 255 bytes, labels of 128 characters, 250 ms → {folder: the Scripts folder's path | null (a session without one, and the web), scripts: [{path, label: the file name without its extension (the whole file name when another row of its folder has that label), folders: [the labels of the subfolders it is in]}], truncated: a limit was reached or a subfolder could not be read, unreadable: the folder is there and could not be read, or is a link}",
+            always,
+            list_installed
         ),
         cmd!(
             query "script.check",
@@ -144,6 +171,60 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn stop(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"stopped": s.script_request_stop()}))
+}
+
+fn console_lines(s: &mut Session, _: &Value) -> Result<Value> {
+    Ok(s.script_console().to_json())
+}
+
+fn console_clear(s: &mut Session, _: &Value) -> Result<Value> {
+    Ok(json!({"cleared": s.clear_script_console()}))
+}
+
+/// The error for a script that File › Scripts listed and that [`script::folder::read`] no longer
+/// reads.
+pub const NOT_LISTED: &str = "the script is no longer in the Scripts folder";
+
+impl Session {
+    /// Have File › Scripts and `script.listInstalled` list the scripts of the folder `dir`. The
+    /// folder is only read, and never made.
+    pub fn attach_scripts_dir(&mut self, dir: std::path::PathBuf) {
+        self.scripts_dir = Some(dir);
+    }
+
+    /// The Scripts folder ([`Session::attach_scripts_dir`]); none on the web, which has no folders.
+    pub fn scripts_dir(&self) -> Option<&std::path::Path> {
+        self.scripts_dir.as_deref().filter(|_| !cfg!(target_arch = "wasm32"))
+    }
+
+    /// The text of the script at `path`, which a listing of the Scripts folder gave
+    /// ([`script::folder::read`]), checked as `script.run` checks a file's.
+    pub fn installed_script(&self, path: &str) -> Result<String> {
+        let root = self.scripts_dir().ok_or_else(|| EngineError::Other(NOT_LISTED.to_string()))?;
+        crate::file_access::check_read(path).map_err(EngineError::Other)?;
+        // One byte more than a script may have shows that the file is too large.
+        let bytes = script::folder::read(root, std::path::Path::new(path), script::MAX_SOURCE_BYTES + 1)
+            .ok_or_else(|| EngineError::Other(NOT_LISTED.to_string()))?;
+        if bytes.len() > script::MAX_SOURCE_BYTES {
+            return Err(EngineError::Other(TOO_LARGE.to_string()));
+        }
+        script_text(&bytes)
+    }
+}
+
+fn list_installed(s: &mut Session, _: &Value) -> Result<Value> {
+    let Some(root) = s.scripts_dir() else {
+        return Ok(json!({"folder": null, "scripts": [], "truncated": false, "unreadable": false}));
+    };
+    let folder = root.to_string_lossy();
+    crate::file_access::check_read(&folder).map_err(EngineError::Other)?;
+    let listing = script::folder::list(root);
+    let scripts: Vec<Value> = listing
+        .scripts()
+        .into_iter()
+        .map(|(folders, label, path)| json!({"path": path.to_string_lossy(), "label": label, "folders": folders}))
+        .collect();
+    Ok(json!({"folder": folder, "scripts": scripts, "truncated": listing.truncated, "unreadable": listing.unreadable}))
 }
 
 /// The folder a script is in, which its included files are read from.

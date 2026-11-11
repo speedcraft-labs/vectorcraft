@@ -88,6 +88,7 @@ impl VectorcraftApp {
                 selection_box: None,
                 selection_bounds: None,
                 content_bounds: None,
+                plugin_keys: Default::default(),
                 cursors: Default::default(),
                 view_moved: None,
                 hover_cursor: None,
@@ -340,6 +341,7 @@ impl VectorcraftApp {
         screen_color::poll(self, ctx);
         self.poll_finished_work();
         crate::script_runs::poll(self);
+        crate::scripts_menu::poll(self, ctx);
         if self.session.script_running() && !self.session.script_waiting() {
             ctx.request_repaint();
         }

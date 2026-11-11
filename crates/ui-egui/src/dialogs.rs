@@ -26,6 +26,7 @@ mod command;
 pub mod composite_fonts;
 pub mod confirm;
 pub mod corners;
+pub mod custom_dictionary;
 pub mod dimension;
 mod document_setup;
 mod duotone;
@@ -321,6 +322,7 @@ registry! {
     BrushDelete: [brush_delete::KIND] => brush_delete::SPEC,
     Message: [confirm::MESSAGE] => confirm::MESSAGE_SPEC,
     Replace: [confirm::REPLACE] => confirm::REPLACE_SPEC,
+    ResetPreferences: [confirm::RESET_PREFS] => confirm::RESET_PREFS_SPEC,
     NewSwatch: [new_swatch::KIND] => new_swatch::SPEC,
     NewColorGroup: [new_color_group::KIND] => new_color_group::SPEC,
     GraphData: [graph_data::KIND] => graph_data::SPEC,
@@ -432,6 +434,7 @@ registry! {
     NewBrush: [new_brush::KIND] => new_brush::SPEC,
     EditSelection: [edit_selection::KIND] => edit_selection::SPEC,
     EditViews: [edit_views::KIND] => edit_views::SPEC,
+    EditCustomDictionary: [custom_dictionary::KIND] => custom_dictionary::SPEC,
     PerspectivePlane: [perspective_plane::KIND] => perspective_plane::SPEC,
     LayerOptions: [layer_options::KIND] => layer_options::SPEC,
     LayersPanelOptions: [layers_panel_options::KIND] => layers_panel_options::SPEC,
@@ -501,6 +504,9 @@ pub fn set_field(d: &mut Dialog, field: String, value: Value) {
     }
     if d.kind == layer_options::KIND {
         layer_options::note_set(d, &field, &value);
+    }
+    if d.kind == "preferences" {
+        crate::prefs_dialog::note_set(d, &field, &value);
     }
     let dxf = (d.kind == dxf_options::KIND).then(|| field.clone());
     d.fields.insert(field, value);
