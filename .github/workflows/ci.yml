@@ -26,6 +26,6 @@ jobs:
       # Linux fallback shaping varies across system font databases (https://github.com/speedcraft-labs/hyper/issues/258).
       - name: Known Linux font fallback test
         continue-on-error: true
-        run: cargo test -p vectorcraft-engine --lib --exact tests::textedit::the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported
+        run: cargo test -p vectorcraft-engine --lib tests::textedit::the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported -- --exact
       - name: Workspace tests
         run: cargo test --workspace --no-fail-fast -- --skip tests::textedit::the_fallback_glyph_of_a_consonant_after_its_vowel_sign_is_reported
