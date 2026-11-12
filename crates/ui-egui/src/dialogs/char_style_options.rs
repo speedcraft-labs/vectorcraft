@@ -26,9 +26,9 @@ const NUMBERS: &[&str] = &["size", "leading", "kerning", "tracking"];
 /// The on, off or unset checkboxes.
 const SWITCHES: &[&str] = &["underline", "strikethrough", "standardVerticalRoman"];
 /// The attributes of Advanced Character Formats, in the order the section shows them.
-const ADVANCED: &[&str] = &["h_scale", "v_scale", "baseline_shift", "rotation", "language"];
+const ADVANCED: &[&str] = &["h_scale", "v_scale", "baseline_shift", "tcyUpDown", "tcyLeftRight", "rotation", "language"];
 /// The number fields of Advanced Character Formats.
-const ADVANCED_NUMBERS: &[&str] = &["h_scale", "v_scale", "baseline_shift", "rotation"];
+const ADVANCED_NUMBERS: &[&str] = &["h_scale", "v_scale", "baseline_shift", "tcyUpDown", "tcyLeftRight", "rotation"];
 /// The attributes of Character Color.
 const COLOR: &[&str] = &["fill", "stroke", "stroke_width", "overprint_fill", "overprint_stroke"];
 /// The fields of Character Color: the fill and stroke paints, their tints in percent, the stroke
@@ -78,6 +78,8 @@ pub(super) const SPEC: DialogSpec = DialogSpec {
             "h_scale",
             "v_scale",
             "baseline_shift",
+            "tcyUpDown",
+            "tcyLeftRight",
             "rotation",
             "language",
             "fill",
@@ -250,8 +252,11 @@ fn optional_number(d: &Dialog, key: &str) -> Result<Option<Value>, String> {
         "h_scale" => tl!("Horizontal Scale"),
         "v_scale" => tl!("Vertical Scale"),
         "baseline_shift" => tl!("Baseline Shift"),
+        "tcyUpDown" => tl!("Tate-chu-yoko Up/Down"),
+        "tcyLeftRight" => tl!("Tate-chu-yoko Left/Right"),
         "rotation" => tl!("Character Rotation"),
-        "fill_tint" | "stroke_tint" => tl!("Tint"),
+        "fill_tint" => tl!("Fill Tint"),
+        "stroke_tint" => tl!("Stroke Tint"),
         "stroke_width" => tl!("Weight"),
         _ => return Err("unknown character style number field".into()),
     };
@@ -280,7 +285,7 @@ fn optional_number(d: &Dialog, key: &str) -> Result<Option<Value>, String> {
             if ["h_scale", "v_scale"].contains(&key) && !(1.0..=10000.0).contains(&n) {
                 return Err(format!("{label} must be a number from 1 to 10000"));
             }
-            if key == "baseline_shift" && !(-1296.0..=1296.0).contains(&n) {
+            if ["baseline_shift", "tcyUpDown", "tcyLeftRight"].contains(&key) && !(-1296.0..=1296.0).contains(&n) {
                 return Err(format!("{label} must be a number from -1296 to 1296"));
             }
             // Weight from 0 to the document limit, a tint from 0% to 100%.
@@ -563,7 +568,7 @@ pub(crate) fn reset_basic(d: &mut Dialog) {
     }
 }
 
-/// Reset Panel in Advanced Character Formats: its five attributes become unset.
+/// Reset Panel in Advanced Character Formats: its seven attributes become unset.
 pub(crate) fn reset_advanced(d: &mut Dialog) {
     d.fields.insert("__resetAdvanced".into(), json!(true));
     for key in ADVANCED_NUMBERS {
@@ -661,18 +666,22 @@ pub(crate) fn basic_body(ui: &mut egui::Ui, d: &mut Dialog) {
             ("kerning", tl!("Kerning")),
             ("tracking", tl!("Tracking")),
         ] {
-            ui.label(caption);
+            let row = ui.label(caption);
             if d.fields.get(key).is_some_and(Value::is_null) {
                 d.fields.insert(key.into(), json!(""));
             }
-            form::text(ui, d, key, 190.0);
+            ui.label_inputs_by(row.id, |ui| form::text(ui, d, key, 190.0));
             ui.end_row();
         }
-        ui.label(tl!("Case"));
-        choice(ui, d, "case", &[("normal", tl!("Normal")), ("allCaps", tl!("All Caps")), ("smallCaps", tl!("Small Caps"))]);
+        let row = ui.label(tl!("Case"));
+        ui.label_inputs_by(row.id, |ui| {
+            choice(ui, d, "case", &[("normal", tl!("Normal")), ("allCaps", tl!("All Caps")), ("smallCaps", tl!("Small Caps"))]);
+        });
         ui.end_row();
-        ui.label(tl!("Position"));
-        choice(ui, d, "position", &[("normal", tl!("Normal")), ("superscript", tl!("Superscript")), ("subscript", tl!("Subscript"))]);
+        let row = ui.label(tl!("Position"));
+        ui.label_inputs_by(row.id, |ui| {
+            choice(ui, d, "position", &[("normal", tl!("Normal")), ("superscript", tl!("Superscript")), ("subscript", tl!("Subscript"))]);
+        });
         ui.end_row();
         for (key, caption) in [
             ("underline", tl!("Underline")),
@@ -693,48 +702,52 @@ pub(crate) fn basic_body(ui: &mut egui::Ui, d: &mut Dialog) {
             }
             ui.end_row();
         }
-        ui.label(tl!("Character Alignment"));
-        choice(
-            ui,
-            d,
-            "charAlign",
-            &[
-                ("romanBaseline", tl!("Roman Baseline")),
-                ("emBoxTop", tl!("Em Box Top/Right")),
-                ("emBoxCenter", tl!("Em Box Center")),
-                ("emBoxBottom", tl!("Em Box Bottom/Left")),
-                ("icfTop", tl!("ICF Top/Right")),
-                ("icfBottom", tl!("ICF Bottom/Left")),
-            ],
-        );
+        let row = ui.label(tl!("Character Alignment"));
+        ui.label_inputs_by(row.id, |ui| {
+            choice(
+                ui,
+                d,
+                "charAlign",
+                &[
+                    ("romanBaseline", tl!("Roman Baseline")),
+                    ("emBoxTop", tl!("Em Box Top/Right")),
+                    ("emBoxCenter", tl!("Em Box Center")),
+                    ("emBoxBottom", tl!("Em Box Bottom/Left")),
+                    ("icfTop", tl!("ICF Top/Right")),
+                    ("icfBottom", tl!("ICF Bottom/Left")),
+                ],
+            );
+        });
         ui.end_row();
     });
 }
 
-/// Advanced Character Formats: Horizontal Scale, Vertical Scale, Baseline Shift, Character Rotation
-/// and Language, each empty (unset) or set.
+/// Advanced Character Formats: Horizontal Scale, Vertical Scale, Baseline Shift, the Tate-chu-yoko
+/// Up/Down and Left/Right, Character Rotation and Language, each empty (unset) or set.
 pub(crate) fn advanced_body(ui: &mut egui::Ui, d: &mut Dialog) {
     egui::Grid::new("character-style-advanced").num_columns(2).spacing([18.0, 8.0]).show(ui, |ui| {
         for (key, caption, unit) in [
             ("h_scale", tl!("Horizontal Scale"), "%"),
             ("v_scale", tl!("Vertical Scale"), "%"),
             ("baseline_shift", tl!("Baseline Shift"), "pt"),
+            ("tcyUpDown", tl!("Tate-chu-yoko Up/Down"), "pt"),
+            ("tcyLeftRight", tl!("Tate-chu-yoko Left/Right"), "pt"),
             ("rotation", tl!("Character Rotation"), "°"),
         ] {
-            ui.label(caption);
+            let row = ui.label(caption);
             if d.fields.get(key).is_some_and(Value::is_null) {
                 d.fields.insert(key.into(), json!(""));
             }
             ui.horizontal(|ui| {
-                form::text(ui, d, key, 160.0);
+                ui.label_inputs_by(row.id, |ui| form::text(ui, d, key, 160.0));
                 ui.label(unit);
             });
             ui.end_row();
         }
-        ui.label(tl!("Language:"));
+        let row = ui.label(tl!("Language:"));
         let names: Vec<&str> = std::iter::once(" ").chain(vectorcraft_doc::setup::LANGUAGES.iter().map(|(name, _, _)| *name)).collect();
         let current = d.fields.get("language").and_then(Value::as_str).unwrap_or("").to_string();
-        if let Some(i) = crate::widgets::dropdown(ui, (KIND, "language"), &current, &names, 190.0) {
+        if let Some(i) = ui.label_inputs_by(row.id, |ui| crate::widgets::dropdown(ui, (KIND, "language"), &current, &names, 190.0)) {
             d.fields.insert("language".into(), if i == 0 { Value::Null } else { names.get(i).map_or(Value::Null, |name| json!(name)) });
         }
         ui.end_row();
@@ -798,9 +811,9 @@ fn paint_choice(ui: &mut egui::Ui, d: &mut Dialog, key: &str) {
 /// the stroke Weight and Overprint Fill and Overprint Stroke, each unset or set.
 pub(crate) fn color_body(ui: &mut egui::Ui, d: &mut Dialog) {
     egui::Grid::new("character-style-color").num_columns(2).spacing([18.0, 8.0]).show(ui, |ui| {
-        for (key, caption) in [("fill", tl!("Fill")), ("stroke", tl!("Stroke"))] {
-            ui.label(caption);
-            paint_choice(ui, d, key);
+        for (key, caption, tint_name) in [("fill", tl!("Fill"), tl!("Fill Tint")), ("stroke", tl!("Stroke"), tl!("Stroke Tint"))] {
+            let row = ui.label(caption);
+            ui.label_inputs_by(row.id, |ui| paint_choice(ui, d, key));
             ui.end_row();
             let tint_key = format!("{key}_tint");
             ui.label(tl!("Tint"));
@@ -810,20 +823,20 @@ pub(crate) fn color_body(ui: &mut egui::Ui, d: &mut Dialog) {
             let linked = d.fields.get(key).and_then(|p| p.get("swatch")).is_some_and(Value::is_string);
             ui.add_enabled_ui(linked, |ui| {
                 ui.horizontal(|ui| {
-                    form::text(ui, d, &tint_key, 160.0);
+                    form::text_named(ui, d, &tint_key, tint_name, 160.0);
                     ui.label("%");
                 });
             });
             ui.end_row();
         }
-        ui.label(tl!("Weight"));
+        let row = ui.label(tl!("Weight"));
         if d.fields.get("stroke_width").is_none_or(Value::is_null) {
             d.fields.insert("stroke_width".into(), json!(""));
         }
         let stroked = d.fields.get("stroke").and_then(|p| p.get("type")).and_then(Value::as_str) != Some("none");
         ui.add_enabled_ui(stroked, |ui| {
             ui.horizontal(|ui| {
-                form::text(ui, d, "stroke_width", 160.0);
+                ui.label_inputs_by(row.id, |ui| form::text(ui, d, "stroke_width", 160.0));
                 ui.label("pt");
             });
         });
@@ -839,11 +852,11 @@ pub(crate) fn opentype_body(ui: &mut egui::Ui, d: &mut Dialog) {
     let figures: Vec<(&str, &str)> = FIGURE_VALUES.into_iter().zip(crate::panels::opentype::FIGURES).collect();
     let positions: Vec<(&str, &str)> = POSITION_VALUES.into_iter().zip(crate::panels::opentype::POSITIONS).collect();
     egui::Grid::new("character-style-opentype").num_columns(2).spacing([18.0, 8.0]).show(ui, |ui| {
-        ui.label(tl!("Figure:"));
-        choice(ui, d, "ot_figure", &figures);
+        let row = ui.label(tl!("Figure:"));
+        ui.label_inputs_by(row.id, |ui| choice(ui, d, "ot_figure", &figures));
         ui.end_row();
-        ui.label(tl!("Position:"));
-        choice(ui, d, "ot_position", &positions);
+        let row = ui.label(tl!("Position:"));
+        ui.label_inputs_by(row.id, |ui| choice(ui, d, "ot_position", &positions));
         ui.end_row();
         for (key, caption) in [
             ("ot_liga", tl!("Standard Ligatures")),
@@ -929,8 +942,8 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
                         opentype_body(ui, d);
                     } else {
                         ui.horizontal(|ui| {
-                            ui.label(tl!("Style Name:"));
-                            form::text(ui, d, "name", 190.0);
+                            let row = ui.label(tl!("Style Name:"));
+                            ui.label_inputs_by(row.id, |ui| form::text(ui, d, "name", 190.0));
                         });
                         ui.separator();
                         if let Ok(attrs) = edited_attrs(d) {
@@ -1466,11 +1479,19 @@ mod tests {
     }
 
     #[test]
-    fn advanced_section_shows_its_five_controls() {
+    fn advanced_section_shows_its_seven_controls() {
         let mut d = dialog_for(json!({}));
         let mut app = app();
         let shown = crate::tests_labels::painted_text(&mut app, |_, ui| advanced_body(ui, &mut d));
-        for label in ["Horizontal Scale", "Vertical Scale", "Baseline Shift", "Character Rotation", "Language:"] {
+        for label in [
+            "Horizontal Scale",
+            "Vertical Scale",
+            "Baseline Shift",
+            "Tate-chu-yoko Up/Down",
+            "Tate-chu-yoko Left/Right",
+            "Character Rotation",
+            "Language:",
+        ] {
             assert!(shown.contains(label), "{label}: {shown}");
         }
     }
@@ -1562,6 +1583,85 @@ mod tests {
         assert!(!def.attrs.contains_key("v_scale"));
     }
 
+    #[test]
+    fn tate_chu_yoko_offsets_show_set_reset_and_keep_their_limits() {
+        let d = dialog_for(json!({"tcyUpDown": 2.0, "size": 12.0}));
+        assert_eq!((d.fields["tcyUpDown"].clone(), d.fields["tcyLeftRight"].clone()), (json!(2.0), json!("")));
+        assert_eq!(edited_attrs(&d).unwrap(), attrs(json!({"tcyUpDown": 2.0, "size": 12.0})));
+        // A value a style captured from scaled text stays while its field is untouched.
+        assert_eq!(edited_attrs(&dialog_for(json!({"tcyLeftRight": 3000.0}))).unwrap(), attrs(json!({"tcyLeftRight": 3000.0})));
+
+        let mut d = dialog_for(json!({"tcyUpDown": 2.0}));
+        d.fields.insert("tcyUpDown".into(), json!(""));
+        d.fields.insert("tcyLeftRight".into(), json!("-1296"));
+        assert_eq!(edited_attrs(&d).unwrap(), attrs(json!({"tcyLeftRight": -1296.0})));
+        d.fields.insert("tcyLeftRight".into(), json!("0"));
+        assert_eq!(edited_attrs(&d).unwrap(), attrs(json!({"tcyLeftRight": 0.0})));
+        for (key, value, message) in [
+            ("tcyUpDown", "1296.1", "Tate-chu-yoko Up/Down must be a number from -1296 to 1296"),
+            ("tcyLeftRight", "-1296.1", "Tate-chu-yoko Left/Right must be a number from -1296 to 1296"),
+            ("tcyUpDown", "high", "Tate-chu-yoko Up/Down must be a number"),
+            ("tcyLeftRight", "NaN", "Tate-chu-yoko Left/Right must be a number"),
+        ] {
+            let mut d = dialog_for(json!({}));
+            d.fields.insert(key.into(), json!(value));
+            assert_eq!(edited_attrs(&d).unwrap_err(), message, "{key} {value}");
+        }
+
+        let mut d = dialog_for(json!({"tcyUpDown": 2.0, "tcyLeftRight": -1.0, "size": 12.0}));
+        d.fields.insert("section".into(), json!("advanced"));
+        reset_section(&mut d);
+        assert_eq!(edited_attrs(&d).unwrap(), attrs(json!({"size": 12.0})));
+    }
+
+    #[test]
+    fn tate_chu_yoko_offsets_preview_cancel_and_commit_to_the_style_and_its_text() {
+        let mut app = app();
+        app.run("charStyle.new", json!({"name": "Body", "attrs": {"size": 24.0, "tcyLeftRight": 0.0}})).unwrap();
+        let id = app.run("text.create", json!({"x": 10, "y": 40, "text": "Text"})).unwrap()["id"].as_u64().unwrap();
+        app.run("charStyle.apply", json!({"name": "Body", "id": id})).unwrap();
+        app.run("text.setRangeStyle", json!({"id": id, "start": 2, "end": 4, "tcyLeftRight": 5.0})).unwrap();
+        let before = app.session.doc().unwrap().doc.clone();
+        let undo = app.session.doc().unwrap().history.undo.len();
+        open(&mut app, "Body").unwrap();
+        {
+            let d = app.ui.dialog.as_mut().unwrap();
+            d.fields.insert("section".into(), json!("advanced"));
+            d.fields.insert("tcyUpDown".into(), json!("4"));
+        }
+        frame(&mut app);
+        assert_eq!(app.session.doc().unwrap().doc.char_styles[0].attrs["tcyUpDown"], json!(4.0));
+        super::super::cancel(&mut app);
+        assert_eq!(app.session.doc().unwrap().doc, before);
+        assert_eq!(app.session.doc().unwrap().history.undo.len(), undo);
+
+        open(&mut app, "Body").unwrap();
+        {
+            let d = app.ui.dialog.as_mut().unwrap();
+            d.fields.insert("tcyUpDown".into(), json!("4"));
+            d.fields.insert("tcyLeftRight".into(), json!("-3"));
+        }
+        super::super::confirm(&mut app).unwrap();
+        let state = app.session.doc().unwrap();
+        assert_eq!(state.history.undo.len(), undo + 1);
+        assert_eq!(state.doc.char_styles[0].attrs, attrs(json!({"size": 24.0, "tcyUpDown": 4.0, "tcyLeftRight": -3.0})));
+        let vectorcraft_doc::NodeKind::Text(t) = &state.doc.node(vectorcraft_doc::NodeId(id)).unwrap().kind else { panic!("text") };
+        assert_eq!(t.runs.iter().map(|r| (r.style.tcy_up_down, r.style.tcy_left_right)).collect::<Vec<_>>(), [(4.0, -3.0), (4.0, 5.0)]);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.doc().unwrap().doc, before);
+
+        app.run("ui.newCharStyle", json!({})).unwrap();
+        {
+            let d = app.ui.dialog.as_mut().unwrap();
+            d.fields.insert("name".into(), json!("Shifted"));
+            d.fields.insert("tcyLeftRight".into(), json!("6"));
+        }
+        super::super::confirm(&mut app).unwrap();
+        let doc = &app.session.doc().unwrap().doc;
+        let def = doc.char_styles.iter().find(|def| def.name == "Shifted").unwrap();
+        assert_eq!(def.attrs["tcyLeftRight"], json!(6.0));
+    }
+
     /// The negated tags of the twenty stylistic sets: an explicit empty Stylistic Sets choice.
     fn no_sets() -> Vec<String> {
         vectorcraft_text::EXTRA_FEATURES[..20].iter().map(|s| format!("-{s}")).collect()
@@ -1643,8 +1743,8 @@ mod tests {
     fn color_tint_and_weight_outside_their_limits_are_errors() {
         let linked = json!({"type": "solid", "color": {"model": "gray", "k": 0.5}, "swatch": "Ink"});
         for (key, value, message) in [
-            ("fill_tint", "150", "Tint must be a number from 0 to 100"),
-            ("stroke_tint", "-1", "Tint must be a number from 0 to 100"),
+            ("fill_tint", "150", "Fill Tint must be a number from 0 to 100"),
+            ("stroke_tint", "-1", "Stroke Tint must be a number from 0 to 100"),
             ("stroke_width", "-1", "Weight must be a number from 0 to 4000000"),
             ("stroke_width", "thick", "Weight must be a number"),
         ] {
@@ -1837,7 +1937,7 @@ mod tests {
             };
             let shown = crate::i18n::message(crate::i18n::current(), &why);
             let mut fonts = false;
-            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 900.0)).with_accessibility_check(false).build_ui_state(
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 900.0)).build_ui_state(
                 move |ui, app: &mut VectorcraftApp| {
                     if !std::mem::replace(&mut fonts, true) {
                         crate::theme::install_fonts(ui.ctx());
@@ -1854,6 +1954,76 @@ mod tests {
             assert!(super::super::confirm(app).is_err(), "{key} confirm");
             assert!(app.ui.dialog.is_some(), "{key} dialog stays open");
             assert_eq!(app.session.doc().unwrap().doc.char_styles.len(), styles, "{key} style count");
+        }
+    }
+
+    #[test]
+    fn every_section_names_its_inputs_in_both_dialogs() {
+        for new_style in [false, true] {
+            for section in ["general", "basic", "advanced", "color", "opentype"] {
+                let mut app = app();
+                if new_style {
+                    app.run("ui.newCharStyle", json!({})).unwrap();
+                } else {
+                    app.run("charStyle.new", json!({"name": "Body", "attrs": {}})).unwrap();
+                    open(&mut app, "Body").unwrap();
+                }
+                app.ui.dialog.as_mut().unwrap().fields.insert("section".into(), json!(section));
+                let mut fonts = false;
+                // The harness fails a frame that leaves an input without an accessible name.
+                let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 900.0)).build_ui_state(
+                    move |ui, app: &mut VectorcraftApp| {
+                        if !std::mem::replace(&mut fonts, true) {
+                            crate::theme::install_fonts(ui.ctx());
+                            return;
+                        }
+                        super::super::show(app, ui.ctx());
+                    },
+                    app,
+                );
+                h.run_steps(4);
+                assert!(h.unnamed_widgets().is_empty(), "new {new_style}, {section}: {:?}", h.unnamed_widgets());
+            }
+        }
+    }
+
+    #[test]
+    fn fill_and_stroke_tint_fields_have_distinct_names() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        for new_style in [false, true] {
+            let mut app = app();
+            app.run("swatch.new", json!({"name": "Brand", "color": "#2050a0", "global": true})).unwrap();
+            if new_style {
+                app.run("ui.newCharStyle", json!({})).unwrap();
+            } else {
+                app.run("charStyle.new", json!({"name": "Body", "attrs": {}})).unwrap();
+                open(&mut app, "Body").unwrap();
+            }
+            let brand = json!(app.session.doc().unwrap().doc.tint_paint("Brand", 1.0).unwrap());
+            {
+                let d = app.ui.dialog.as_mut().unwrap();
+                d.fields.insert("section".into(), json!("color"));
+                d.fields.insert("fill".into(), brand.clone());
+                d.fields.insert("stroke".into(), brand);
+            }
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 900.0)).build_ui_state(
+                move |ui, app: &mut VectorcraftApp| {
+                    if !std::mem::replace(&mut fonts, true) {
+                        crate::theme::install_fonts(ui.ctx());
+                        return;
+                    }
+                    super::super::show(app, ui.ctx());
+                },
+                app,
+            );
+            h.run_steps(4);
+            for name in ["Fill Tint", "Stroke Tint"] {
+                let field = h.get_by_role_and_label(Role::TextInput, name);
+                assert!(!field.accesskit_node().is_disabled(), "new {new_style}: {name} is enabled for a linked swatch");
+            }
+            assert!(h.query_by_role_and_label(Role::TextInput, "Tint").is_none(), "new {new_style}: a field is named only Tint");
         }
     }
 

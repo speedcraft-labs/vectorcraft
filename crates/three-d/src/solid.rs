@@ -11,11 +11,12 @@
 
 use vectorcraft_geom::{BezPath, FillRule, ParamCurve, PathData, Point, Rect, Vec2};
 
-use crate::{MAX_FACES, Revolve, V3, eye_distance, perspective_scale};
+use crate::{MAX_FACES, MAX_SOLID_FACES, Revolve, V3, eye_distance, perspective_scale};
 
 mod build;
 mod inflate;
 mod membrane;
+mod outline;
 mod rings;
 
 #[cfg(test)]
@@ -23,11 +24,13 @@ use build::{Camera, cuts, edge_distance, newell, section};
 pub(crate) use build::{Face3, extrude_faces, plane_faces};
 pub use build::{extrude, plane};
 #[cfg(test)]
+use inflate::GRID_WORK;
+#[cfg(test)]
 pub(crate) use inflate::INFLATED;
 pub(crate) use inflate::inflate_faces;
 pub use inflate::{inflate, inflate_together};
 #[cfg(test)]
-use membrane::{Edges, Membrane, cell_triangles};
+use membrane::{Edges, GRID_BUDGET, MAX_EDGE_ENTRIES, MAX_GRID_WORK, Membrane, cell_triangles};
 use rings::signed_area;
 #[cfg(test)]
 use rings::{MAX_SOLID_POINTS, rings};
@@ -251,6 +254,15 @@ pub struct Facet {
     pub normal: [f64; 3],
     /// Smooth lighting on an inflated triangle, before clipping individual RGB channels.
     pub rgb_gradient: Option<crate::RgbGradient>,
+    /// The facet's outline with the profile's curves kept as cubics, for [`Facet::path`]. The
+    /// contours stay the polygon that visibility and depth use.
+    pub outline: Option<PathData>,
+    /// The facet is a piece of the solid's sides (Extrude & Bevel's walls and bevels, Inflate's
+    /// sides) rather than of its ends (the caps, a plane, Inflate's front and back).
+    pub side: bool,
+    /// The facet is turned away from the viewer: a closed solid keeps it (seen edge-on, or with
+    /// Draw Hidden Faces) and draws it behind the facets turned toward the viewer.
+    pub away: bool,
     /// The contours in view space, before projection, for tests that measure depths.
     #[cfg(test)]
     view: Vec<Vec<V3>>,
@@ -266,7 +278,11 @@ impl Facet {
         if perimeter > 0.0 { 2.0 * area / perimeter } else { 0.0 }
     }
 
+    /// The facet's outline: its curved outline when it has one, else its contours.
     pub fn path(&self) -> PathData {
+        if let Some(path) = &self.outline {
+            return path.clone();
+        }
         let mut bp = BezPath::new();
         for c in &self.contours {
             let Some(first) = c.first() else { continue };
@@ -277,6 +293,24 @@ impl Facet {
             bp.close_path();
         }
         PathData::from_bezpath(&bp)
+    }
+
+    /// Revolve's face `face` as a facet: its polygon, curved outline, depth, normal and lighting.
+    /// A face that joins the profile's ends round the axis is a side; a cap is an end.
+    pub(crate) fn of_face(face: crate::Face) -> Self {
+        Facet {
+            contours: vec![face.points],
+            depth: face.depth,
+            brightness: face.brightness,
+            illumination: face.illumination,
+            normal: face.normal,
+            rgb_gradient: None,
+            outline: face.outline,
+            side: !face.cap,
+            away: false,
+            #[cfg(test)]
+            view: vec![],
+        }
     }
 }
 
@@ -319,3 +353,6 @@ mod tests;
 
 #[cfg(test)]
 mod tests_inflate_shading;
+
+#[cfg(test)]
+mod tests_limits;

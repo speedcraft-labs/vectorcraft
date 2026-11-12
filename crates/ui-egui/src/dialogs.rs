@@ -8,6 +8,7 @@
 
 mod about;
 pub mod action_batch;
+pub mod action_insert_menu_item;
 pub mod action_new;
 pub mod action_playback;
 pub mod action_set_options;
@@ -17,6 +18,7 @@ pub mod blend_options;
 mod brush_art_options;
 pub mod brush_delete;
 pub mod brush_options;
+pub mod brush_replace_art;
 pub mod bullets_numbering;
 pub mod char_style_options;
 pub mod color_balance;
@@ -26,6 +28,7 @@ mod command;
 pub mod composite_fonts;
 pub mod confirm;
 pub mod corners;
+pub mod custom_dictionary;
 pub mod dimension;
 mod document_setup;
 mod duotone;
@@ -76,6 +79,7 @@ pub mod new_text_style;
 pub mod objects_on_path_options;
 pub mod office_export;
 pub mod package;
+pub mod para_style_options;
 pub(crate) mod path_ops;
 pub mod pathfinder_options;
 pub mod pdf_presets;
@@ -319,8 +323,10 @@ registry! {
     SwatchOptions: [swatch_options::KIND] => swatch_options::SPEC,
     Confirm: [confirm::KIND] => confirm::SPEC,
     BrushDelete: [brush_delete::KIND] => brush_delete::SPEC,
+    BrushReplaceArt: [brush_replace_art::KIND] => brush_replace_art::SPEC,
     Message: [confirm::MESSAGE] => confirm::MESSAGE_SPEC,
     Replace: [confirm::REPLACE] => confirm::REPLACE_SPEC,
+    ResetPreferences: [confirm::RESET_PREFS] => confirm::RESET_PREFS_SPEC,
     NewSwatch: [new_swatch::KIND] => new_swatch::SPEC,
     NewColorGroup: [new_color_group::KIND] => new_color_group::SPEC,
     GraphData: [graph_data::KIND] => graph_data::SPEC,
@@ -331,6 +337,7 @@ registry! {
     ColorPicker: [color_picker::KIND] => color_picker::SPEC,
     GraphicStyleOptions: [graphic_style_options::KIND] => graphic_style_options::SPEC,
     CharStyleOptions: [char_style_options::KIND] => char_style_options::SPEC,
+    ParaStyleOptions: [para_style_options::KIND] => para_style_options::SPEC,
     NewTextStyle: [new_text_style::KIND] => new_text_style::SPEC,
     EffectExists: [effect::EXISTS] => effect::EXISTS_SPEC,
     ColorGuideOptions: [color_guide_options::KIND] => color_guide_options::SPEC,
@@ -387,6 +394,7 @@ registry! {
     ActionPlayback: [action_playback::KIND] => action_playback::SPEC,
     ActionStopRecord: [action_stop::RECORD_KIND] => action_stop::RECORD_SPEC,
     ActionStopMessage: [action_stop::MESSAGE_KIND] => action_stop::MESSAGE_SPEC,
+    ActionInsertMenuItem: [action_insert_menu_item::KIND] => action_insert_menu_item::SPEC,
     SliceOptions: [slices::OPTIONS] => slices::OPTIONS_SPEC,
     DivideSlices: [slices::DIVIDE] => slices::DIVIDE_SPEC,
     EpsOptions: [eps_options::KIND] => eps_options::SPEC,
@@ -408,6 +416,7 @@ registry! {
     ScriptRun: [script_run::KIND] => script_run::SPEC,
     ScriptGrowth: [script_run::GROWTH_KIND] => script_run::GROWTH_SPEC,
     ScriptClose: [script_run::CLOSE_KIND] => script_run::CLOSE_SPEC,
+    ScriptNotice: [script_run::NOTICE_KIND] => script_run::NOTICE_SPEC,
     VectorHalftone: [halftone::KIND] => halftone::SPEC,
     SimplifySlider: [simplify_slider::KIND] => simplify_slider::SPEC,
     SmoothSlider: [smooth_slider::KIND] => smooth_slider::SPEC,
@@ -432,6 +441,7 @@ registry! {
     NewBrush: [new_brush::KIND] => new_brush::SPEC,
     EditSelection: [edit_selection::KIND] => edit_selection::SPEC,
     EditViews: [edit_views::KIND] => edit_views::SPEC,
+    EditCustomDictionary: [custom_dictionary::KIND] => custom_dictionary::SPEC,
     PerspectivePlane: [perspective_plane::KIND] => perspective_plane::SPEC,
     LayerOptions: [layer_options::KIND] => layer_options::SPEC,
     LayersPanelOptions: [layers_panel_options::KIND] => layers_panel_options::SPEC,
@@ -501,6 +511,9 @@ pub fn set_field(d: &mut Dialog, field: String, value: Value) {
     }
     if d.kind == layer_options::KIND {
         layer_options::note_set(d, &field, &value);
+    }
+    if d.kind == "preferences" {
+        crate::prefs_dialog::note_set(d, &field, &value);
     }
     let dxf = (d.kind == dxf_options::KIND).then(|| field.clone());
     d.fields.insert(field, value);
@@ -581,6 +594,9 @@ pub fn cancel(app: &mut VectorcraftApp) {
         // The growth question's Cancel button is its Stop button.
         if d.kind == script_run::GROWTH_KIND {
             app.session.script_request_stop();
+        }
+        if d.kind == script_run::NOTICE_KIND {
+            script_run::notice_cancel(app, &d);
         }
         // Toolbar-only Flare options start no preview and must not cancel a gesture
         // that was already active before opening them. The generic parameter dialog has a spec
