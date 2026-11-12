@@ -137,6 +137,35 @@ fn summary_warnings_are_translated() {
     assert_eq!(warning_line(fr, "no row: for this note"), "⚠ no row\u{a0}: for this note");
 }
 
+/// The warnings and the error for a page longer than 14,400 pt are translated: a PDF 1.5 file
+/// written as PDF 1.6, a page with a `UserUnit`, a PDF/X-4 page in points, a refused PDF/X-1a
+/// file and a page too narrow for the `UserUnit` its long side needs.
+#[test]
+fn long_page_notes_are_translated() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 56_692.91, "height": 2_834.65})).unwrap();
+    let mut notes: Vec<String> = vec![];
+    for p in [json!({"compatibility": "1.5"}), json!({"preset": "PDF/X-4:2010"})] {
+        let r = s.execute("document.exportPdf", &p).unwrap();
+        let warnings = r["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str());
+        notes.extend(warnings.filter(|w| w.contains("14,400 pt")).map(str::to_string));
+    }
+    notes.push(s.execute("document.exportPdf", &json!({"preset": "PDF/X-1a:2001"})).unwrap_err().to_string());
+    s.execute("file.new", &json!({"width": 85_040, "height": 17})).unwrap();
+    let r = s.execute("document.exportPdf", &json!({})).unwrap();
+    let warnings = r["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str());
+    notes.extend(warnings.filter(|w| w.contains("too long and narrow")).map(str::to_string));
+    assert_eq!(notes.len(), 5, "{notes:?}");
+    let english = ["has no UserUnit, which", "apps that ignore UserUnit", "apps that keep to the limit", "real numbers up to", "too long and narrow"];
+    for code in ["de", "fr", "ja", "zh-hans"] {
+        let lang = crate::i18n::Lang::from_code(code).unwrap();
+        for note in &notes {
+            let shown = warning_line(lang, note);
+            assert!(english.iter().all(|e| !shown.contains(e)), "{code}: {shown}");
+        }
+    }
+}
+
 /// A placed image whose pixel data can't be decoded is left out of the PDF, and the status bar
 /// shows the note raster exports give.
 #[test]
@@ -292,6 +321,39 @@ fn choosing_a_pdfx_standard_sets_its_version_and_writes_the_standard() {
     set(d, "standard", json!(Standard::PdfX4.id()));
     standard_chosen(d, Standard::PdfX4);
     assert_eq!((get(d, "compatibility"), get(d, "createLayers")), (&json!("1.6"), &json!(true)));
+}
+
+/// "Write pages longer than 200 in at full size in points" is enabled only without a standard, at
+/// PDF 1.5 and later: PDF/X files and PDF 1.3 and 1.4 files write long pages in points anyway, and
+/// PDF/A files keep the `UserUnit`.
+#[test]
+fn the_long_pages_in_points_check_box_is_disabled_with_a_standard() {
+    const LABEL: &str = "Write pages longer than 200 in at full size in points";
+    let (mut app, _, _) = app();
+    app.run("ui.savePdfDialog", json!({})).unwrap();
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 900.0));
+    let frame = |app: &mut VectorcraftApp| {
+        let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| super::super::show(app, ui.ctx()));
+        out.textures_delta.clear();
+        out
+    };
+    for s in Standard::ALL.iter().copied() {
+        for c in Compatibility::ALL.iter().copied().filter(|c| s.allows(*c)) {
+            set_field(&mut app, "standard", json!(s.id()));
+            set_field(&mut app, "compatibility", json!(c.id()));
+            frame(&mut app);
+            let out = frame(&mut app);
+            let nodes = &out.platform_output.accesskit_update.as_ref().expect("an accessibility tree").nodes;
+            let node = nodes.iter().find(|(_, n)| n.label() == Some(LABEL) && n.role() == egui::accesskit::Role::CheckBox);
+            let disabled = node.unwrap_or_else(|| panic!("no check box named {LABEL:?}")).1.is_disabled();
+            let enabled = s == Standard::None && !matches!(c, Compatibility::Pdf13 | Compatibility::Pdf14);
+            assert_eq!(disabled, !enabled, "{} {}", s.label(), c.label());
+        }
+    }
 }
 
 #[test]

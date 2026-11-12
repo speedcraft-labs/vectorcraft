@@ -27,11 +27,11 @@ This page is the contract for plug-in authors and the reference for the host (`c
 
 | Command | Params | What it does |
 |---|---|---|
-| `plugin.list` | `{}` | `{"plugins": [{id, name, version, kind, author, description, params, paramsSchema, effect?, format?, extensions?, budget?, commands?, size, source, api, paintOutput?, permissions, hash, cacheBytes}], "folder": report}` (`api` is the manifest's [plug-in API level](#permissions); `budget: "heavy"` for a [heavy filter](#heavy-filters); `commands` lists its [commands](#commands); `paintOutput: true` marks a [painted live effect](#painted-live-effects); `permissions` lists what it [may do](#permissions), `hash` is the module's SHA-256; `cacheBytes` is the size of its [cache](#settings-and-cache)) |
+| `plugin.list` | `{}` | `{"plugins": [{id, name, version, kind, author, description, params, paramsSchema, effect?, format?, extensions?, budget?, commands?, commandAllowlist?, size, source, api, paintOutput?, permissions, hash, cacheBytes}], "folder": report}` (`api` is the manifest's [plug-in API level](#permissions); `budget: "heavy"` for a [heavy filter](#heavy-filters); `commands` lists its [commands](#commands); `commandAllowlist` lists the commands it may [call](#command-calls); `paintOutput: true` marks a [painted live effect](#painted-live-effects); `permissions` lists what it [may do](#permissions), `hash` is the module's SHA-256; `cacheBytes` is the size of its [cache](#settings-and-cache)) |
 | `plugin.info` | `{"id"}` | One plug-in: the `plugin.list` entry plus `manifest`, `defaults` and `lastError` (a live effect's last failure). |
 | `plugin.run` | `{"id", "params"?: {…}, "ids"?: [...]}` (plug-in params may also be top-level keys) | Runs an object filter on the selection (or `ids`; an `ids` that is not a list of object ids is an error). One undo step; the result is selected, except the objects it locked or made guides. |
-| `plugin.install` | `{"path": "/x/y.wasm"}` (desktop) or `{"dataBase64": "…", "name"?}`, `"replace"?: bool`, `"allowHeavy": bool = false`, `"grant"?: [permission]`, `"hash"?: "sha256 hex"` | Validates and installs a module; returns its `plugin.list` entry. The desktop app and `vectorcraft-cli` keep it in the `Plug-ins` folder next to the preferences, so it is installed again after a restart (#2541). A module with other bytes than the plug-in installed with its id, or, with none installed, one whose id has [settings and a cache](#settings-and-cache) in the `Plug-ins` folder, installs only with `replace: true`, once the user agreed; it takes that plug-in's place and gets its settings and cache. The same module installs again without `replace`, and `replace: false` refuses a module whose id is installed. A [heavy filter](#heavy-filters) installs only with `allowHeavy: true`. A plug-in whose manifest lists [permissions](#permissions) installs only when `grant` lists every one of them, unless a grant is already recorded for a module with the same SHA-256. A request's `grant` and `allowHeavy` are refused except in a session started with `vectorcraft-cli --allow-plugin-grants`. With `hash`, a module whose SHA-256 differs is refused. |
-| `plugin.inspect` | as `plugin.install`: `{"path"}` or `{"dataBase64", "name"?}` | Validates a module without installing it; returns the `plugin.list` entry it would have, plus `needsApproval` (true when installing it needs a person's approval) and `needsReplace` (true when `plugin.install` needs `replace: true`). |
+| `plugin.install` | `{"path": "/x/y.wasm"}` (desktop) or `{"dataBase64": "…", "name"?}`, `"replace"?: bool`, `"allowHeavy": bool = false`, `"grant"?: [permission]`, `"hash"?: "sha256 hex"` | Validates and installs a module; returns its `plugin.list` entry. The desktop app and `vectorcraft-cli` keep it in the `Plug-ins` folder next to the preferences, so it is installed again after a restart (#2541). A module with other bytes than the plug-in installed with its id, or, with none installed, one whose id has [settings and a cache](#settings-and-cache) in the `Plug-ins` folder, installs only with `replace: true`, once the user agreed; it takes that plug-in's place and gets its settings and cache. The same module installs again without `replace`, and `replace: false` refuses a module whose id is installed. A [heavy filter](#heavy-filters) installs only with `allowHeavy: true`. A plug-in whose manifest lists [permissions](#permissions) installs only when `grant` lists every one of them, unless a grant is already recorded for a module with the same SHA-256. A request's `grant` and `allowHeavy` are refused except in a session started with `vectorcraft-cli --allow-plugin-grants`. With `hash`, a module whose SHA-256 differs is refused. A module whose `commandAllowlist` lists a command no plug-in may call is refused; ids no command has are listed as `unknownCommands` ([command calls](#command-calls)). |
+| `plugin.inspect` | as `plugin.install`: `{"path"}` or `{"dataBase64", "name"?}` | Validates a module without installing it; returns the `plugin.list` entry it would have, plus `needsApproval` (true when installing it needs a person's approval), `needsReplace` (true when `plugin.install` needs `replace: true`), and the `commandAllowlist` ids no command has (`unknownCommands`) and those no plug-in may call (`refusedCommands`). |
 | `plugin.remove` | `{"id"}` | Uninstalls, and deletes it from the `Plug-ins` folder with its [settings and cache](#settings-and-cache). |
 | `plugin.clearCache` | `{"id"?}` | Deletes every entry in the [cache](#settings-and-cache) of plug-in `id`, or of every installed plug-in; settings stay. Returns `{"cleared": [id], "bytesFreed"}`. |
 | `plugin.reload` | `{"path"?: "folder"}` (default: the preference folder) | Installs every `*.wasm` in a folder; a bad module is reported and skipped, and so are a heavy filter and a plug-in whose permissions the user hasn't granted (nobody was asked). |
@@ -128,7 +128,7 @@ The host is [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust WebAssem
 | Linear memory | 512 MiB per instance (input and parameters: at most half) | `memory.grow` returns -1; oversized input or initial memory fails |
 | Output | 64 MiB of JSON | `Limit("output size")` |
 | Instructions (fuel) | 50 M per call + 4,000 per input byte for `vc_run`; a [heavy filter](#heavy-filters) 1 G + 4,000 per byte; an export or import 10 G + 4,000 per byte | `Limit("instruction budget")` |
-| Wall clock | 60 s per filter run, 5 s per live-effect run, 300 s per heavy filter run, export or import (desktop; checked every 20 M instructions) | `Limit("time budget")` |
+| Wall clock | 60 s per filter run, 5 s per live-effect run, 300 s per heavy filter run, export or import (checked every 20 M instructions; the web build reads the page's `performance.now()`) | `Limit("time budget")` |
 | Import input | 128 MiB of the file (`vectorcraft_plugins::import::MAX_INPUT_BYTES`) | the file doesn't open; a larger file named by `path` is not read past that |
 | Call depth | 1,024 frames | trap |
 | Module shape | wasmi's strict limits (≤ 10,000 functions, 1 memory, …) | rejected |
@@ -136,6 +136,19 @@ The host is [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust WebAssem
 An export runs where the export runs: with Background Export on, on the export's worker, whose Cancel stops the
 plug-in between two of those 20 M-instruction slices; nothing is written then. An import stops the same way when the
 open it runs in is cancelled, and nothing opens then.
+
+### Live effects while a document opens
+
+While the app draws a document on screen, the live-effect runs of its first view share a 2,000 ms budget
+(`vectorcraft_plugins::deferred::OPENING_BUDGET_MS`, VectorCraft's own value), measured from the first run. Each run
+takes the lesser of its 5 s limit and what is left of the budget; once the budget is spent no run starts, and a result
+that comes back after it is not used. A stage left out this way, or one that times out, traps, returns output the host
+refuses or has no plug-in, draws its input art unchanged and is deferred. The status bar then says how many stages
+are deferred, and later drawings leave them as they are until their input or parameters change. Effect › Refresh
+Deferred Effects (`effect.refreshDeferred`) runs them again with a fresh budget, and `effect.deferredStatus` lists
+them with the reason (`budget`, `timeout`, `missing`, `failed`, `safeMode`). Each document has its own budget.
+Exports, Expand Appearance and commands run every stage under the 5 s limit. The web build has the same budget,
+measured with the page's `performance.now()`.
 
 ### Heavy filters
 
@@ -157,7 +170,7 @@ much there is only once the run has ended.
   Cancel (also Esc) and Continue in Background (`plugin.cancelRuns`, `plugin.hideRuns`). When it is done its result is
   applied as `plugin.run` with the same parameters and objects, as one undo step, unless the document or the plug-in
   changed meanwhile: then nothing changes, and the status bar says to run it again. On the web, which has no threads,
-  it runs at once; the instruction budget alone bounds it there.
+  it runs at once, under the same instruction budget and 300 s limit.
 - `plugin.run` itself runs a heavy filter where it is called, as it runs any filter: an MCP client waits for it, and
   its `notifications/cancelled` stops it.
 
@@ -178,6 +191,7 @@ capability model proposed for PhotoCraft plug-ins
 | `progress` | all | Show its progress, see Cancel and write log lines through the [host imports](#host-imports-api-level-2). Needs `api` 2. |
 | `settings` | all | Keep settings of its own between runs and sessions ([settings and cache](#settings-and-cache)). Needs `api` 2. |
 | `cache` | all | Keep a cache of its own, which the user can clear ([settings and cache](#settings-and-cache)). Needs `api` 2. |
+| `commands` | filter | Run the commands its `commandAllowlist` lists on the document ([command calls](#command-calls)). Needs `api` 2. |
 
 - A manifest without `permissions` gets the ones its kind implies, as plug-ins did before the key existed: a filter
   `doc.read`, `doc.write` and `state`; an effect `doc.read` and `effect.render`, and also `doc.write` and `state`
@@ -186,9 +200,10 @@ capability model proposed for PhotoCraft plug-ins
   these, and also installs without a prompt.
 - An effect, an exporter or an importer that lists permissions lists all of its implied ones (`doc.read` and
   `effect.render`; `doc.read` and `export.write`; `import.read`). An effect with commands may add `doc.write` and
-  `state`, which only its commands use. A filter may list any of its three.
+  `state`, which only its commands use. A filter may list any of its three, and `commands` with a `commandAllowlist`.
   Any kind may add `progress`, `settings` and `cache`, which no kind implies. An unknown name, a name listed twice, a
-  name that doesn't apply to the kind, more than 16 names, `progress`, `settings` or `cache` with an `api` below 2, or
+  name that doesn't apply to the kind, more than 16 names, `progress`, `settings`, `cache` or `commands` with an `api`
+  below 2, or
   one of the names kept for a later plug-in API
   (`ui.panel`, `ui.tool`) is refused when the module is installed, and the error names it.
 - **Installing asks first.** Install Plug-in… and File › Open show the plug-in's name, id, version, the SHA-256 of
@@ -197,7 +212,21 @@ capability model proposed for PhotoCraft plug-ins
   names shown have control and bidirectional characters escaped (`\u{202E}`) and are cut to 64 characters.
   Only a person can press its OK: `ui.dialog.confirm`, MCP's `answer_dialog` and injected input (`ui.key`, `ui.click`)
   are refused and the dialog stays open. Enter confirms it only when OK has the keyboard focus. `ui.dialog.set` can't
-  change what it installs.
+  change what it installs. OK stays disabled until the question has been on screen in the focused window for half a
+  second (VectorCraft's own value, from the delay the security guidance at
+  https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/security/security-considerations-for-browser-ui.md
+  gives for dialog boxes), so a click, Enter or Space, or a press begun before then, installs nothing. The half second
+  starts over for every new question, even one that reads the same, and when the window gets the focus back. Cancel
+  and Escape work at once. A module that would take the place of the installed plug-in with its id asks in the same
+  dialog.
+- **An install that automation asked for is not approved in its dialog.** When a control request, MCP, injected input,
+  or a file dialog that one of them opened (even when the person picks the file there) leads to the approval dialog, its
+  OK stays disabled, a confirm is refused even after the half second, and the dialog says that automation asked for the
+  install. `ui.installPlugin` returns `{pending: "pluginInstall", approval: "personMustStartInstall"}`. Cancel still
+  closes it. To install the plug-in, the person chooses Object › Plug-ins › Install Plug-in… and picks the file, or
+  opens it with File › Open or drops it on the window: the module is inspected again and the new question waits its
+  half second. A request's `replace: true` does not skip asking about taking another module's place. A module that
+  needs no approval still installs at once from any request. This is VectorCraft's own rule.
 - `plugin.install` refuses the module, naming the permissions it needs, unless this module already has a recorded grant
   (`plugin.inspect`'s `needsApproval` tells it beforehand). A request's `grant` is refused too: `plugin.install` takes
   it only with the approval the dialog gives. A `vectorcraft-cli mcp` or `run` started with `--allow-plugin-grants`
@@ -211,6 +240,13 @@ capability model proposed for PhotoCraft plug-ins
   `VECTORCRAFT_NO_PREFS` set there is no store, and a `grant` accepted under the flag lasts for that session only.
   With `--allow-plugin-grants`, pass `hash` set to the `plugin.inspect` entry's `hash` so that the module installed is
   the one the user saw.
+- The approval protects against plug-ins and automation clients (MCP, scripts and CLI requests): none of them can
+  approve a module's permissions. VectorCraft's own code records a grant only after that approval and when it loads
+  `grants.json`, and installs a module that lists permissions only under a grant recorded for this very module,
+  also when it loads the Additional Plug-ins Folder. The approval does not protect against native code linked into
+  VectorCraft or against another program running as the same user, which can change the files in the `Plug-ins`
+  folder. `grants.json` is not signed, so such a program can add a grant to it. `--allow-plugin-grants` is a choice
+  the person starting a headless session makes.
 - **Replacing asks first.** When the file is another module than the plug-in installed with its id, or, with none
   installed, its id has settings and a cache in the `Plug-ins` folder, Install Plug-in… and File › Open show its id
   and SHA-256 and ask whether to install it in place of that plug-in, which gives it the settings and cache kept for
@@ -225,7 +261,9 @@ capability model proposed for PhotoCraft plug-ins
   records the new hash. When the new module or its grant can't be written to the `Plug-ins` folder, the folder keeps
   the old module and its grant, and the old module loads at the next start. If the write that puts the old module back
   fails as well, the folder holds the new module with the old grant, the grant does not cover that module, and the
-  plug-in is skipped at the next start until it is approved again. A grant whose hash is not 64 lower-case
+  plug-in is skipped at the next start until it is approved again. When the folder held no module for that id, that
+  write removes the new module; when the removal fails, the folder holds the new module and no grant covers it. In
+  both cases a disabled plug-in is turned on, as for any install the folder holds. A grant whose hash is not 64 lower-case
   hexadecimal digits covers nothing. `plugin.remove` forgets the grant, and so does a successful `plugin.install` of a
   module that lists no permissions under that id, so the earlier bytes need a new approval. When `plugin.remove` can't
   remove the grant from `grants.json`, it returns an error, the plug-in stays installed, and a second `plugin.remove`
@@ -233,14 +271,16 @@ capability model proposed for PhotoCraft plug-ins
   write the module to the `Plug-ins` folder, or can't remove the grant from `grants.json`, the folder keeps the module
   it held and `grants.json` keeps the grant. The new module runs until the session ends. When the grant can't be
   removed and the module already stored can't be read back or written back, the new module stays in the folder, and
-  the grant does not count for the rest of the session. The grant also does not count when the folder held no module
-  for that id. A
+  the grant stops counting. The grant also stops counting when the folder held no module for that id. A
   `grants.json` larger than 1 MiB, or one that is not a JSON list, grants nothing: the new module stays in the folder,
   and `plugin.remove` removes the plug-in. A `grants.json` that can't be opened or read counts as a grant that can't be
   removed. When VectorCraft loads the `Plug-ins` folder, it forgets any grant for an id whose stored module lists no
-  permissions. When it can't remove that grant from `grants.json`, or can't read the file, the grant does not count for
-  the rest of the session, or until the plug-in is granted again, including for the next load, which tries the removal
-  again. In Safe Mode, and for
+  permissions. When it can't remove that grant from `grants.json`, or can't read the file, the grant stops counting,
+  including for the next load, which tries the removal again. A grant that stops counting in either of these cases
+  does not count for any session in the same process that uses the same `Plug-ins` folder, by any path to it, until
+  `grants.json` can be written for that plug-in, as when the plug-in is granted again. Another process on the same
+  folder, for example `vectorcraft-cli` beside the app, still reads `grants.json` as it is written. A grant for the
+  same id kept in another `Plug-ins` folder counts. In Safe Mode, and for
   a stored module that the user disabled,
   VectorCraft does not read the module, and `grants.json` keeps the grant for its id. The Additional Plug-ins Folder
   and `plugin.reload` do not change the `Plug-ins` folder: when they leave a module that lists no permissions under an
@@ -308,7 +348,8 @@ module's memory.
 A plug-in whose manifest gives `"api": 2` and lists the [permission](#permissions) an import needs may import these
 functions from module `env` (the module a Rust or C toolchain gives `extern` functions by default). `vc_abi_version`
 still returns `1`. `vc_progress`, `vc_cancelled` and `vc_log` need `progress`; the `vc_settings_*` imports need
-`settings` and the `vc_cache_*` imports need `cache` ([settings and cache](#settings-and-cache)).
+`settings` and the `vc_cache_*` imports need `cache` ([settings and cache](#settings-and-cache)); `vc_call` and
+`vc_call_result` need `commands` ([command calls](#command-calls)).
 
 | Import | Signature | Meaning |
 |---|---|---|
@@ -320,7 +361,11 @@ still returns `1`. `vc_progress`, `vc_cancelled` and `vc_log` need `progress`; t
   and one the manifest doesn't allow (an `api` below 2, or without the import's permission) refuse the module, and the
   error names the import and the permission.
 - A filter's or an exporter's progress is shown as a share: a heavy filter's progress window and the export's progress
-  window draw a bar with a percentage, and Cancel there makes `vc_cancelled` return `1`. A plug-in that checks it can
+  window draw a bar with a percentage, and Cancel there makes `vc_cancelled` return `1`. In the desktop app a light
+  filter that lists `progress` runs in the background as a heavy one does, under its light budget, when it runs at once
+  from Object › Plug-ins or its shortcut, or when OK runs it with Preview off; with Preview on, its dialog keeps the
+  previewed run. A filter that also lists a `commandAllowlist` runs where it is called, since its command calls need
+  the document. A plug-in that checks `vc_cancelled` can
   stop early, and the host discards what it returns after the Cancel or after its time budget ran out; one that
   ignores it is still stopped by the instruction and time budgets. With a known total, a report is passed on only when
   it reaches another tenth of a percent; with an unknown total, each change of `done` is passed on. After 2,000 reports
@@ -378,16 +423,68 @@ A live effect runs while the art draws, so keep the entries it uses small.
   write leaves in the `cache` folder does not count toward the caps, and clearing the cache removes it.
 - A plug-in reaches only the storage of its own id. Replacing it with another module of the same id
   (`plugin.install` with `replace: true`, after the user agreed) keeps the storage; `plugin.remove` deletes it, and a run of the plug-in still going gets `-5` from every storage call after that.
-  `plugin.remove` first renames the folder (adding `.removed` to its name). When that fails, `plugin.remove` fails
-  and the plug-in stays installed with its storage as it was. Files that can't be deleted after the rename stay in the
-  `.removed` folder, where no plug-in reaches them. A later `plugin.remove` tries again to delete them when a plug-in
-  with that id is installed or a storage folder for the id exists, and that deletion can fail too. For an id that
-  isn't installed and has only a `.removed` folder, `plugin.remove` does not delete the folder and fails as not found.
+  `plugin.remove` first renames the folder, adding `.removed` to its name (or `.removing` while a `.removed` folder
+  holds settings an earlier removal kept). When that fails, `plugin.remove` fails and the plug-in stays installed with
+  its storage as it was. Before VectorCraft deletes a renamed folder, it writes an empty file beside it with `.delete`
+  added to the folder's name, and removes that file once the folder is gone. When that file can't be written, the
+  folder is not deleted and is treated like any renamed folder without a `.delete` file (see below). Files that can't be deleted stay in the
+  renamed folder with the `.delete` file beside it, where no plug-in reaches them. A later `plugin.remove` tries again
+  to delete them when a plug-in with that id is installed or a storage folder for the id exists, and that deletion can
+  fail too. For an id that isn't installed and has only such a folder, `plugin.remove` does not delete it and fails as
+  not found. When `plugin.remove` can't remove the grant and can't rename the folder back either, its error names the
+  renamed folder. The next load, install or `plugin.remove` of the plug-in renames a renamed folder that has no
+  `.delete` file back while the plug-in has no folder of its own; when it has one, that folder is used and the renamed
+  folder stays until `plugin.remove` deletes both.
   `plugin.remove` with the id of a plug-in that isn't installed deletes the storage kept for that id, when there is
   any.
   `plugin.clearCache` empties the cache and leaves the settings, and `plugin.list` and
   `plugin.info` give the cache's size as `cacheBytes`.
 - Without a `Plug-ins` folder (the web build, and embedders that attach none) the storage calls return `-5`.
+
+### Command calls
+
+A filter whose manifest lists the `commands` permission and names commands in `commandAllowlist` runs those commands
+on the document while it runs (#2186). It names each command by its id, as `command_list` lists it, and passes its
+arguments as a JSON object, the params the command takes from any request:
+
+| Import | Signature | Meaning |
+|---|---|---|
+| `vc_call` | `(id, id_len, args, args_len) -> i32` | Runs the command whose UTF-8 id is at `id` with the JSON object at `args` (`args_len` 0 means `{}`). Returns `0` when it ran, else a negative code. |
+| `vc_call_result` | `(out, out_cap) -> i32` | The JSON result of the last call that ran: its length in bytes. When it fits in the `out_cap` bytes at `out`, its bytes are copied there; otherwise nothing is copied. `-10` when no call has a result, `-1` when the buffer doesn't lie inside the module's memory. |
+
+`vc_call` returns `-1` when the id or the arguments don't lie inside the module's memory, `-2` when they are not UTF-8,
+`-3` when the arguments are not a JSON object, `-4` when `commandAllowlist` doesn't list the id, `-5` when no command
+has the id, `-6` when a plug-in may not call the command, `-7` when the command can't run now (nothing is selected),
+`-8` when the command ran and failed, `-9` when a limit below is passed, and `-11` when nothing can be called (from
+the module's start function, in a run that isn't a filter's run on a document, or after a call in the run failed).
+
+- Every code also fails the run, whatever the plug-in does next, and the error names the call and why it failed. The run's calls and its output are one undo step, named after the plug-in or its command. A run that fails,
+  traps, runs out of budget or is canceled leaves every document, its selection and its history as they were.
+- Each call runs on the document the run is for, with its params checked as any request's are, and sees what the calls
+  before it changed: a `select.all` followed by `object.move` moves everything. The filter's own input is the one it
+  was given when the run started; an edit still in progress (typing, or a shape being drawn) is kept as its own undo
+  step before that input is made.
+- A plug-in never calls a command that reads or writes a file or folder, uses the clipboard, changes preferences or
+  the view, runs a script, an action or a plug-in (a `plugin.*` command, or arguments naming one, such as an
+  `effect.apply` of `plugin.<id>`), opens, closes or switches documents, or undoes or redoes, whatever its manifest
+  lists. The same goes for a command that changes a tool's options, keeps a drag's state or adds font names for the
+  whole app, and for a command VectorCraft adds later until it has been checked for plug-in calls. Installing a
+  manifest that lists such a command is refused, and the error names it; `plugin.inspect` lists them as
+  `refusedCommands`.
+- A call whose arguments hold a file or folder key (`path`, `paths`, `file`, `files`, `folder`, `folders`, `dir`,
+  `directory`, `destinationFolder`, `sourceFolder` or `url`) at any depth, such as an effect's `textureImage.path`,
+  returns `-6`; only a key that names part of the document in that command, as its own param, is let through. A
+  command a plug-in calls can't read or write any file or folder.
+- An id in `commandAllowlist` that no command has installs, so a plug-in can list a command a later version adds;
+  `plugin.install` and `plugin.inspect` list such ids as `unknownCommands`, and calling one returns `-5` (`-6` without
+  `doc.read`).
+- Without `doc.read`, every call of a listed id fails with `-6`, since a command's result describes the document.
+  Without `doc.write`, a call that changes the document fails with `-6`.
+- These limits are VectorCraft's own values: at most 1,000 calls a run, 8 MiB of arguments or result a call and 64 MiB
+  of arguments and results a run. Each call costs 10,000 instructions of the run's budget, plus one for every 64 bytes
+  of its arguments and its result, and the run checks Cancel and its time budget before and after each call.
+- A filter that calls commands runs on the app's main thread, so it can't ask for a heavy budget: a manifest with
+  `commandAllowlist` and `budget: "heavy"` is refused.
 
 ### Manifest
 
@@ -437,6 +534,10 @@ A live effect runs while the art draws, so keep the entries it uses small.
   `a-z 0-9 _` that starts with a letter, and appears once. A `label` is 1–64 printable characters; menus show it with
   control and bidirectional characters escaped. `params` are declared as the plug-in's own `params` are. A malformed
   entry is refused when the module is installed, and the error names the command by its id (or its place, `[0]`).
+- `commandAllowlist` (filters at `api` 2 with the usual budget, and only with the `commands` permission, which needs
+  it): the ids of the commands the filter may [call](#command-calls), at most 256, each once (`"commandAllowlist":
+  ["select.all", "object.move"]`). An id is 1–128 characters from `A-Z a-z 0-9 . _ -` that starts with a letter, with
+  no empty part between dots. A malformed list is refused when the module is installed, and the error names the id.
 - `params`: in dialog order. Names are `[A-Za-z0-9_]`, not starting with `_`, and not `id`, `ids`, `params` or
   `preview`. The host validates the user's values before calling: missing values take the default, numbers are
   clamped to `min..max` (ints rounded), a wrong type or an unknown choice is an error. Numeric defaults
