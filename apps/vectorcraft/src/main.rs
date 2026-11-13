@@ -370,6 +370,11 @@ fn main() -> std::process::ExitCode {
     let mut options = native_options(custom_titlebar);
     // Started for an agent (`--control`): open without taking the user's keyboard focus.
     options.viewport = options.viewport.with_active(!agent);
+    // Keep an agent window behind normal application windows, even when eframe first shows it.
+    #[cfg(target_os = "macos")]
+    if agent {
+        options.viewport = options.viewport.with_window_level(egui::viewport::WindowLevel::AlwaysOnBottom);
+    }
     options.event_loop_builder = agent_event_loop(agent);
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; Preferences › Performance › Linux
     // Display Server › X11 opens the window through XWayland instead, where file drops work (#1151),
