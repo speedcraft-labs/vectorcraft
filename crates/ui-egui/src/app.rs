@@ -110,6 +110,7 @@ impl VectorcraftApp {
             clipboard_publishing: Default::default(),
             pending_url: None,
             control_rx: None,
+            raise_without_focus: None,
             deferred_control: None,
             synthetic_dropped_before: 0,
             pending_screenshots: vec![],
