@@ -6,6 +6,47 @@ use super::{ControlRequest, MAX_DIALOG_FIELDS, Outcome, handle};
 use crate::state::Dialog;
 use crate::{Services, VectorcraftApp};
 
+static RAISES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn raise_without_focus() -> bool {
+    RAISES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    true
+}
+
+#[test]
+fn ui_requests_raise_without_focus_but_ui_focus_stays_explicit() {
+    use egui::{ViewportCommand, ViewportId};
+
+    let mut app = VectorcraftApp::new(Session::new(), Services::default());
+    app.raise_without_focus = Some(raise_without_focus);
+    let ctx = egui::Context::default();
+    RAISES.store(0, std::sync::atomic::Ordering::SeqCst);
+
+    let (req, _) = ControlRequest::new("ui.inspect", json!({}));
+    let mut output = ctx.run_ui(Default::default(), |_| {
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Done(_)));
+    });
+    output.textures_delta.clear();
+    assert_eq!(RAISES.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!output.viewport_output[&ViewportId::ROOT].commands.iter().any(|c| matches!(c, ViewportCommand::Focus)));
+
+    let (req, _) = ControlRequest::new("ui.screenshot", json!({"focus": true}));
+    let mut output = ctx.run_ui(Default::default(), |_| {
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Screenshot { .. }));
+    });
+    output.textures_delta.clear();
+    assert_eq!(RAISES.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(!output.viewport_output[&ViewportId::ROOT].commands.iter().any(|c| matches!(c, ViewportCommand::Focus)));
+
+    let (req, _) = ControlRequest::new("ui.focus", json!({}));
+    let mut output = ctx.run_ui(Default::default(), |_| {
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Done(_)));
+    });
+    output.textures_delta.clear();
+    assert_eq!(RAISES.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(output.viewport_output[&ViewportId::ROOT].commands.iter().any(|c| matches!(c, ViewportCommand::Focus)));
+}
+
 fn input_request(app: &mut VectorcraftApp, method: &str, params: Value) -> Value {
     let (req, _) = ControlRequest::new(method, params);
     let Outcome::Done(r) = handle(app, &egui::Context::default(), &req) else { panic!("expected immediate reply") };

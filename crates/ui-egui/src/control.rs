@@ -21,6 +21,7 @@
 //!   `ui.dialog.confirm` / `ui.dialog.cancel`
 //! - `ui.resize {width, height}`, `ui.focus`, `ui.screenshot {path?, data?}` (`data: true`: the PNG
 //!   comes back as `pngBase64` as well)
+//! - `ui.focus`: explicitly activate the window and take keyboard focus.
 //! - `ui.render {path?, scale?, artboard?, data?, traceViews?}`: render an artboard headlessly
 //!   (`artboard`: its 0-based index, default the first; PNG with the pixels of a PNG export on
 //!   white; `traceViews: true` draws Image Trace objects in their View, as the canvas does; without
@@ -315,6 +316,13 @@ fn modifiers(p: &Value) -> egui::Modifiers {
 }
 
 pub fn handle(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    if req.method.starts_with("ui.") && req.method != "ui.focus" {
+        // UI requests need a rendered pass, but must not activate the app for an agent.
+        if let Some(raise_without_focus) = app.raise_without_focus {
+            raise_without_focus();
+            ctx.request_repaint();
+        }
+    }
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     match req.method.as_str() {
@@ -443,7 +451,7 @@ pub fn handle(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlReques
             if let Some(Err(e)) = s("path").map(vectorcraft_engine::file_access::check_write) {
                 return err(e);
             }
-            if p.get("focus").and_then(Value::as_bool).unwrap_or(true) {
+            if app.raise_without_focus.is_none() && p.get("focus").and_then(Value::as_bool).unwrap_or(true) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             ctx.request_repaint();

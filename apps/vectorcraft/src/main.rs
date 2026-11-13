@@ -61,6 +61,8 @@ mod system_fonts;
 mod tablet;
 mod window;
 mod window_frame;
+#[cfg(target_os = "macos")]
+mod window_raise;
 mod windows_alt_codes;
 #[cfg(windows)]
 mod windows_cores;
@@ -225,6 +227,20 @@ fn read_command_line(
     Ok(CommandLine { files, in_window_menus, new_instance, safe_mode })
 }
 
+/// Driven by an agent (`--control`): don't activate the app on launch, so the user's keyboard
+/// focus stays where it is (macOS; winit activates ignoring other apps by default).
+fn agent_event_loop(agent: bool) -> Option<eframe::EventLoopBuilderHook> {
+    #[cfg(target_os = "macos")]
+    if agent {
+        return Some(Box::new(|b| {
+            use winit::platform::macos::EventLoopBuilderExtMacOS;
+            b.with_activate_ignoring_other_apps(false);
+        }));
+    }
+    let _ = agent;
+    None
+}
+
 fn main() -> std::process::ExitCode {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
@@ -257,6 +273,7 @@ fn main() -> std::process::ExitCode {
             }
         },
     };
+    let agent = control_port.is_some();
     // Before desktop services, so every start-up warning is recorded (`logging`).
     let logger = logging::install();
     // Files opened from the file manager while VectorCraft runs open in its window (#4892). Before
@@ -350,7 +367,10 @@ fn main() -> std::process::ExitCode {
     #[cfg(feature = "wgpu")]
     let crash = left_out.crash.clone();
     let custom_titlebar = custom_titlebar(saved.as_ref());
-    let options = native_options(custom_titlebar);
+    let mut options = native_options(custom_titlebar);
+    // Started for an agent (`--control`): open without taking the user's keyboard focus.
+    options.viewport = options.viewport.with_active(!agent);
+    options.event_loop_builder = agent_event_loop(agent);
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; Preferences › Performance › Linux
     // Display Server › X11 opens the window through XWayland instead, where file drops work (#1151),
     // and the other choices do so when a pen is attached, where the pen draws (#2028, #4967).
@@ -462,6 +482,10 @@ fn main() -> std::process::ExitCode {
                 let stopped = safe_mode::begin_launch(launch_dir.as_deref(), safe_mode_flag);
                 prefs_dir::attach_plugin_store(&mut session);
                 let mut app = VectorcraftApp::new(session, services(cc.winit_window().cloned(), cc.egui_ctx.clone()));
+                #[cfg(target_os = "macos")]
+                if agent {
+                    app.raise_without_focus = Some(window_raise::raise_without_focus);
+                }
                 app.set_startup_update_check(true);
                 load_prefs(&mut app, saved);
                 safe_mode::after_start(&mut app, stopped);
