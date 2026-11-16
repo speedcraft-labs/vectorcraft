@@ -1674,7 +1674,7 @@ fn dispatch(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRequest)
                 Ok(flags) => flags,
                 Err(e) => return err(e),
             };
-            if focus.unwrap_or(true) {
+            if app.raise_without_focus.is_none() && focus.unwrap_or(true) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             ctx.request_repaint();
