@@ -130,13 +130,11 @@ impl RenderContext {
         #[cfg(feature = "gpu")]
         if self.gpu_supported
             && let Some((scene, runtime)) = &self.gpu
+            && let Ok(mut runtime) = runtime.lock()
+            && runtime.render_into(scene, self.width, self.height, pixmap.data_as_u8_slice_mut())
         {
-            if let Ok(mut runtime) = runtime.lock()
-                && runtime.render_into(scene, self.width, self.height, pixmap.data_as_u8_slice_mut())
-            {
-                self.gpu_used = true;
-                return;
-            }
+            self.gpu_used = true;
+            return;
         }
         if self.record_cpu {
             self.cpu.render_with(pixmap, resources, settings);

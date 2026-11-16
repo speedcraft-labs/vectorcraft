@@ -28,6 +28,7 @@ fn synthetic(paths: usize) -> Result<Document, String> {
     Ok(doc)
 }
 
+#[cfg(feature = "gpu-raster")]
 fn edge_mask(cpu: &[u8], gpu: &[u8], width: usize, height: usize) -> Vec<bool> {
     let mut base = vec![false; width * height];
     for y in 0..height {
@@ -71,6 +72,7 @@ fn edge_mask(cpu: &[u8], gpu: &[u8], width: usize, height: usize) -> Vec<bool> {
     expanded
 }
 
+#[cfg(feature = "gpu-raster")]
 fn synthetic_geometry_edge_mask(paths: usize, width: usize, height: usize, scale: f64) -> Vec<bool> {
     let mut mask = vec![false; width * height];
     let mut mark_boundary = |x0: f64, y0: f64, x1: f64, y1: f64, ellipse: bool| {
